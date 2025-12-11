@@ -1,61 +1,49 @@
 # run_server.py
+"""
+Server mode entry point for smFISH detection pipeline.
+Author: Elias Guan
+"""
+
 import os
-from pathlib import Path
+from functions.io_utils import load_config, create_folder_in_same_directory
+from functions.spot_detection import detect_spots_from_config
 import numpy as np
-from tifffile import imread, imwrite
-
-from functions.io_utils import create_folder_in_same_directory, load_config
-from functions.spot_detection import detect_spots_real  # your real detection function
+from tifffile import imwrite
 
 
-def run_pipeline(config_path: str):
-    """
-    Run the smFISH detection pipeline on the SSH/server environment using a YAML config.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-    """
-    # --- Load config ---
+def main():
+    # Step 1: Load config
+    config_path = os.path.join(os.path.dirname(__file__), "config_example.yaml")
     config = load_config(config_path)
     print("Loaded config parameters:")
-    for k, v in config.items():
-        print(f"{k}: {v}")
+    for key, value in config.items():
+        print(f"{key}: {value}")
 
-    # --- Create results folder ---
-    smFISH_path = config["smFISHChannelPath"]
-    results_folder = create_folder_in_same_directory(smFISH_path, "results")
-    print(f"Results will be saved in: {results_folder}")
+    # Step 2: Create main results folder
+    exp_path = config.get("smFISHChannelPath")
+    results_folder = create_folder_in_same_directory(exp_path, "results")
 
-    # --- Load image ---
-    img = imread(smFISH_path)
-    print(f"Loaded image shape: {img.shape}, dtype: {img.dtype}")
+    # Step 3: Create subfolders for organized outputs
+    npy_folder = create_folder_in_same_directory(results_folder, "npy")
+    tiff_folder = create_folder_in_same_directory(results_folder, "tiff")
+    plots_folder = create_folder_in_same_directory(results_folder, "plots")
 
-    # --- Run smFISH detection ---
-    spots, threshold = detect_spots_real(img, config, results_folder)
+    # Step 4: Run spot detection (control + experiment)
+    spots_exp, threshold_used, img_log_exp = detect_spots_from_config(
+        config, results_folder=results_folder
+    )
 
-    # --- Save spots ---
-    np.save(os.path.join(results_folder, "spots.npy"), spots)
-    print(f"Saved detected spots: {spots.shape}")
+    # Step 5: Save experiment results
+    # Save spots as npy
+    np.save(os.path.join(npy_folder, "spots_exp.npy"), spots_exp)
 
-    # --- Optionally save spot info ---
-    if config.get("saveSpotInformation", True):
-        info_path = os.path.join(results_folder, "spot_info.txt")
-        with open(info_path, "w") as f:
-            f.write(f"spots shape: {spots.shape}\n")
-            f.write(f"threshold: {threshold}\n")
-        print(f"Saved spot info at: {info_path}")
+    # Save LoG filtered image as tiff
+    imwrite(os.path.join(tiff_folder, "smFISH_LoG_filtered.tif"), img_log_exp, photometric='minisblack')
 
-    print("✔ Pipeline completed successfully!")
+    print(f"Experiment spots detected: {len(spots_exp)}")
+    print(f"Threshold used for experiment: {threshold_used}")
+    print(f"Results saved in:\n  {npy_folder}\n  {tiff_folder}\n  {plots_folder}")
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Run smFISH detection on server")
-    parser.add_argument(
-        "--config", type=str, required=True,
-        help="Path to the YAML configuration file"
-    )
-    args = parser.parse_args()
-
-    run_pipeline(args.config)
+    main()

@@ -1,9 +1,9 @@
 # config.yaml
-controlImage: false
-controlPath: null
-smFISHChannelPath: "/scratch/qgs8612/worm1/Image1_565.tif"
-controlAverageThreshold: null
-experimentAverageThreshold: 10
+controlImage: False
+controlPath: "/Users/eliasguan/Desktop/DL_210_data_analysis/testcontrol/control_0h_Incision_Image1_565.tif"
+smFISHChannelPath: "/Users/eliasguan/Desktop/DL_210_data_analysis/Example_Image_analysis/smallworm/below_the_eyes/worm1/565/Image1_565.tif"
+controlThreshold: null
+experimentThreshold: 10
 minimal_distance: [2, 2, 2]
 kernel_size: [1, 1.7, 1.7]
 control_voxel_size: [361, 75, 75]
@@ -27,4 +27,4 @@ plotExactSpot: false
 exactSpotSize: 2
 plotSpotLabel: false
 plot_spot_size: 4
-resultsFolderName: results
+results_folder: results

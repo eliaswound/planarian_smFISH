@@ -28,6 +28,7 @@ def main():
     tiff_folder = create_folder_in_same_directory(results_folder, "tiff")
     plots_folder = create_folder_in_same_directory(results_folder, "plots")
 
+
     # Step 4: Run spot detection (control + experiment)
     spots_exp, threshold_used, img_log_exp = detect_spots_from_config(
         config, results_folder=results_folder

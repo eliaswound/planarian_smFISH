@@ -99,33 +99,14 @@ def find_spots_around(coordinate, array, max_iterations=10):
 
 
 def compute_control_spot_intensities(control_path, config, results_folder):
-    """
-    Compute intensities of candidate spots on the control image.
-
-    Args:
-        control_path (str): path to control image
-        config (dict): configuration parameters
-        results_folder (str): folder to save intermediate results
-
-    Returns:
-        spots_all (list): list of all detected spot coordinates
-        spot_intensities (np.array): intensity of each spot
-        img_log (np.array): LoG filtered image
-    """
     if not os.path.exists(control_path):
         raise FileNotFoundError(f"Control image not found: {control_path}")
 
-    # Step 1: Load image
     img = imread(control_path)
-    print(f"Loaded control image: {img.shape}")
-
-    # Step 2: LoG filtering
     kernel_size = config["kernel_size"]
     img_log = log_filter(img, kernel_size)
     imwrite(os.path.join(results_folder, "control_LoG_filtered.tif"), img_log)
-    print("Saved LoG filtered control image.")
 
-    # Step 3: BigFISH detection at threshold = 0
     spots_all, _ = bf_detect_spots(
         images=img,
         threshold=0,
@@ -135,95 +116,181 @@ def compute_control_spot_intensities(control_path, config, results_folder):
         log_kernel_size=kernel_size,
         minimum_distance=config["minimal_distance"]
     )
+
     print(f"Detected {len(spots_all)} candidate spots at threshold=0.")
 
-    # Step 4 & 5: Compute intensity for each spot
-    spot_intensities = []
+    # YOUR LoG-integrated intensity
+    total_intensities = []
+    # NEW: LoG peak (center voxel) intensity
+    peak_intensities = []
+
     for spot in spots_all:
-        coords = find_spots_around(spot, img_log)
-        intensity = np.sum(img_log[tuple(coords.T)])  # sum of voxel values
-        spot_intensities.append(intensity)
+        z, y, x = spot[0], spot[1], spot[2]
 
-    spot_intensities = np.array(spot_intensities)
-    print(f"Computed intensities for {len(spot_intensities)} spots.")
+        coords = find_spots_around((z, y, x), img_log)
+        total_intensities.append(np.sum(img_log[tuple(coords.T)]))
 
-    return spots_all, spot_intensities, img_log
+        peak_intensities.append(img_log[z, y, x])   # <--- ADD THIS
 
+    return (
+        spots_all,
+        np.array(total_intensities),
+        np.array(peak_intensities),  # <--- NEW RETURN VALUE
+        img_log
+    )
 
-def compute_control_threshold(spots_all, spot_intensities, percentile=0.99):
+def control_peak_intensities(control_path, config, results_folder):
     """
-    Compute threshold for experimental image based on control spots.
-
-    Args:
-        spots_all (list): output from BigFISH detect_spots (s[3] is intensity)
-        spot_intensities (np.array): intensities computed from find_spots_around
-        percentile (float): fraction of spots to keep below threshold (0.99 = 99%)
+    Detect all candidate centroids in the control image (threshold=0),
+    compute the LoG image, and return the LoG peak value at each centroid.
 
     Returns:
-        threshold (float): maximum s[3] of the selected control spots
-        selected_indices (np.array): indices of spots used
+        spots_all: ndarray of centroids (N,3)
+        peak_values: 1D ndarray of LoG peak values (N,)
+        img_log: the LoG-filtered image (for inspection / saving)
     """
-    # Step 1: number of spots to select
-    n_spots = int(np.floor(len(spot_intensities) * percentile))
+    if not os.path.exists(control_path):
+        raise FileNotFoundError(f"Control image not found: {control_path}")
 
-    # Step 2: indices of smallest intensities
-    sorted_indices = np.argsort(spot_intensities)
-    selected_indices = sorted_indices[:n_spots]
+    # load and LoG-filter
+    img = imread(control_path)
+    kernel_size = config["kernel_size"]
+    img_log = log_filter(img, kernel_size)
+    imwrite(os.path.join(results_folder, "control_LoG_filtered.tif"), img_log)
 
-    # Step 3: map back to spots_all and get s[3] values
-    selected_spot_s3 = [spots_all[i][3] for i in selected_indices]
+    # detect all local maxima (threshold=0)
+    spots_all, _ = bf_detect_spots(
+        images=img,
+        threshold=0,
+        return_threshold=True,
+        voxel_size=config["voxel_size"],
+        spot_radius=config["spot_size"],
+        log_kernel_size=kernel_size,
+        minimum_distance=config["minimal_distance"]
+    )
 
-    # Step 4: maximum of these s[3] values → threshold
-    threshold = max(selected_spot_s3)
+    # get LoG peak at centroid for each detected spot
+    peak_values = []
+    for s in spots_all:
+        z, y, x = int(s[0]), int(s[1]), int(s[2])
+        peak_values.append(float(img_log[z, y, x]))
 
-    return threshold, selected_indices
+    return spots_all, np.array(peak_values), img_log
+
+def compute_control_threshold(total_intensities, peak_intensities, percentile=0.99):
+    """
+    Args:
+        total_intensities: array of your flood-filled LoG intensities
+        peak_intensities: array of LoG peak values at spot centroid
+        percentile: 0.99 = use the 99th percentile spot
+    Returns:
+        threshold (float): LoG threshold for BigFISH
+        selected_index (int): index of chosen spot
+    """
+
+    # sort by your custom total intensity
+    sorted_indices = np.argsort(total_intensities)
+    idx = sorted_indices[int(len(total_intensities) * percentile)]
+
+    # threshold = LoG peak intensity at that spot
+    threshold = peak_intensities[idx]
+
+    print(f"Control threshold (LoG peak at {percentile*100}%): {threshold}")
+
+    return threshold, idx
 
 # functions/spot_detection.py
 
-def detect_spots_from_config(config):
+def compute_control_threshold_from_peaks(peak_values, percentile=99):
     """
-    Main function to detect spots on experiment image using control image threshold or config threshold.
+    Use the percentile (0-100) of centroid LoG peaks as the control threshold.
+    """
+    if len(peak_values) == 0:
+        return 0.0  # no peaks -> fallback to 0
+    thr = float(np.percentile(peak_values, percentile))
+    return thr
+
+def detect_spots_from_config(config, img_path=None, threshold=None, results_folder=None):
+    """
+    Detect smFISH spots using:
+    1. Control-image-based threshold (highest priority, 99th percentile of LoG peaks)
+    2. experimentThreshold from config
+    3. BigFISH automatic threshold
+    4. Manual override (threshold argument)
 
     Args:
-        config (dict): Configuration dictionary
+        config (dict): configuration dictionary
+        img_path (str): path to experiment image (optional, uses config if None)
+        threshold (float): override threshold (rarely needed)
+        results_folder (str): folder to save output
 
     Returns:
-        spots_exp (np.ndarray): Detected experiment spots
-        exp_threshold_used (float): Threshold applied
+        spots_exp (np.ndarray)
+        exp_threshold_used (float)
+        img_log_exp (np.ndarray)
     """
-    results_folder = os.path.join(os.path.dirname(config["smFISHChannelPath"]), "results")
+
+    import os
+    from tifffile import imread, imwrite
+    from bigfish.stack import log_filter
+    from bigfish.detection import detect_spots as bf_detect_spots
+    from .spot_detection import control_peak_intensities, compute_control_threshold_from_peaks
+    import numpy as np
+
+    # ------------------------------
+    # Initialize paths
+    # ------------------------------
+    if img_path is None:
+        img_path = config["smFISHChannelPath"]
+
+    if results_folder is None:
+        results_folder = os.path.join(os.path.dirname(img_path), "results")
     os.makedirs(results_folder, exist_ok=True)
 
     control_threshold = None
 
-    # Step 1: Control image threshold
+    # ------------------------------
+    # Step 1 — Compute threshold from control image (if enabled)
+    # ------------------------------
     if config.get("controlImage") and config.get("controlPath"):
-        print("Running control image detection...")
-        from .spot_detection import compute_control_spot_intensities, compute_control_threshold
-        spots_all, spot_intensities, img_log = compute_control_spot_intensities(
+        print("Running control image -- computing centroid LoG peaks...")
+        spots_all, peak_values, img_log_ctrl = control_peak_intensities(
             config["controlPath"], config, results_folder
         )
-        control_threshold, selected_indices = compute_control_threshold(
-            spots_all, spot_intensities, percentile=0.99
-        )
-        print(f"Control threshold computed: {control_threshold}")
 
-    # Step 2: Load experiment image
-    img_exp = imread(config["smFISHChannelPath"])
+        # Use 99th percentile as threshold
+        control_threshold = compute_control_threshold_from_peaks(peak_values, percentile=99)
+        print(f"Control-derived threshold (99th percentile of LoG peaks): {control_threshold}")
+
+    # ------------------------------
+    # Step 2 — Load experimental image
+    # ------------------------------
+    img_exp = imread(img_path)
     print(f"Loaded experiment image: {img_exp.shape}")
 
-    # Step 3: Determine threshold
+    # ------------------------------
+    # Step 3 — Decide which threshold to use
+    # ------------------------------
     if control_threshold is not None:
         threshold_to_use = control_threshold
-        print("Using threshold from control image.")
-    elif config.get("experimentAverageThreshold") is not None:
-        threshold_to_use = config["experimentAverageThreshold"]
-        print(f"Using threshold from config: {threshold_to_use}")
+        print("Using control-based threshold.")
+    elif config.get("experimentThreshold") is not None:
+        threshold_to_use = config["experimentThreshold"]
+        print(f"Using experimentThreshold from config: {threshold_to_use}")
     else:
-        threshold_to_use = None  # BigFISH auto-threshold
+        threshold_to_use = None     # BigFISH auto threshold
         print("Using BigFISH automatic threshold.")
 
-    # Step 4: Detect experiment spots
+    # ------------------------------
+    # Step 4 — Manual override
+    # ------------------------------
+    if threshold is not None:
+        threshold_to_use = threshold
+        print(f"Overriding threshold manually: {threshold_to_use}")
+
+    # ------------------------------
+    # Step 5 — Detect experiment spots
+    # ------------------------------
     spots_exp, exp_threshold_used = bf_detect_spots(
         images=img_exp,
         threshold=threshold_to_use,
@@ -231,14 +298,17 @@ def detect_spots_from_config(config):
         voxel_size=config["voxel_size"],
         spot_radius=config["spot_size"],
         log_kernel_size=config["kernel_size"],
-        minimum_distance=config["minimal_distance"],
+        minimum_distance=config["minimal_distance"]
     )
-    print(f"Detected {len(spots_exp)} spots on experiment image (threshold={exp_threshold_used})")
+    print(f"Detected {len(spots_exp)} experiment spots (threshold={exp_threshold_used})")
 
-    # Step 5: Save LoG filtered image and spots
+    # ------------------------------
+    # Step 6 — Save results
+    # ------------------------------
     img_log_exp = log_filter(img_exp, config["kernel_size"])
     imwrite(os.path.join(results_folder, "experiment_LoG_filtered.tif"), img_log_exp)
     np.save(os.path.join(results_folder, "experiment_spots.npy"), spots_exp)
-    print("Saved experiment LoG filtered image and spots array.")
+    print("Saved experiment LoG TIFF + NPY.")
 
-    return spots_exp, exp_threshold_used
+    return spots_exp, exp_threshold_used, img_log_exp
+

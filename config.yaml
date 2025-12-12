@@ -1,7 +1,7 @@
 # config.yaml
 controlImage: False
-controlPath: "/Users/eliasguan/Desktop/DL_210_data_analysis/testcontrol/control_0h_Incision_Image1_565.tif"
-smFISHChannelPath: "/Users/eliasguan/Desktop/DL_210_data_analysis/Example_Image_analysis/smallworm/below_the_eyes/worm1/565/Image1_565.tif"
+controlPath: "/scratch/qgs8612/worm1/565"
+smFISHChannelPath: "/scratch/qgs8612/worm1/565/Image1_565.tif"
 controlThreshold: null
 experimentThreshold: 10
 minimal_distance: [2, 2, 2]

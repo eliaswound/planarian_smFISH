@@ -8,11 +8,8 @@
 #SBATCH --output=EG12122501output.log
 
 # Load environment
-source ~/.bashrc               # loads conda
-conda activate smfish_env
-
-which python
-python --version
+$ module load python-miniconda3
+$ source activate /home/qgs8612/.conda/envs/smfish_env
 
 
 # Run your script

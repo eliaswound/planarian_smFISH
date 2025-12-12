@@ -4,6 +4,8 @@ Server mode entry point for smFISH detection pipeline.
 Author: Elias Guan
 """
 
+
+
 import os
 from functions.io_utils import load_config, create_folder_in_same_directory
 from functions.spot_detection import detect_spots_from_config
@@ -13,7 +15,7 @@ from tifffile import imwrite
 
 def main():
     # Step 1: Load config
-    config_path = os.path.join(os.path.dirname(__file__), "config_example.yaml")
+    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     config = load_config(config_path)
     print("Loaded config parameters:")
     for key, value in config.items():

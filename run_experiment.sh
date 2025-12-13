@@ -9,35 +9,28 @@
 #SBATCH --job-name=EG121225GPU
 #SBATCH --output=EG_new_GPU_LoG_test_output.log
 
-# -----------------------------
-# Environment setup
-# -----------------------------
 module load python-miniconda3
 
-# Initialize conda for non-interactive shell
-source $(conda info --base)/etc/profile.d/conda.sh
-conda activate /home/qgs8612/.conda/envs/smfish_env
+# Option A: source bashrc + activate (works if bashrc is set up)
+# source ~/.bashrc
+# conda activate /home/qgs8612/.conda/envs/smfish_env
 
-# -----------------------------
+# Option B: direct Python from environment (recommended)
+PYTHON=/home/qgs8612/.conda/envs/smfish_env/bin/python
+
 # GPU diagnostics
-# -----------------------------
 echo "===== NVIDIA-SMI ====="
 nvidia-smi
 
 echo "===== CUDA visible devices ====="
-python - <<EOF
-try:
-    import torch
-    print("CUDA available:", torch.cuda.is_available())
-    print("CUDA device count:", torch.cuda.device_count())
-    if torch.cuda.is_available():
-        print("GPU name:", torch.cuda.get_device_name(0))
-except ImportError:
-    print("Torch not installed or not found!")
+$PYTHON - <<EOF
+import torch
+print("CUDA available:", torch.cuda.is_available())
+print("CUDA device count:", torch.cuda.device_count())
+if torch.cuda.is_available():
+    print("GPU name:", torch.cuda.get_device_name(0))
 EOF
 
-# -----------------------------
 # Run smFISH pipeline
-# -----------------------------
-python /home/qgs8612/planarian_smFISH/run_server.py \
-  --config /home/qgs8612/planarian_smFISH/config.yaml
+$PYTHON /home/qgs8612/planarian_smFISH/run_server.py \
+    --config /home/qgs8612/planarian_smFISH/config.yaml

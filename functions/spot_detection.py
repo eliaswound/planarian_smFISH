@@ -210,20 +210,15 @@ def compute_control_threshold_from_peaks(peak_values, percentile=99):
     thr = float(np.percentile(peak_values, percentile))
     return thr
 
-def detect_spots_from_config(config, img_path=None, threshold=None, results_folder=None):
+def detect_spots_from_config(config, img_path=None, threshold=None, results_folder=None, device=None):
     """
-    Detect smFISH spots using:
-    1. Control-image-based threshold (highest priority, 99th percentile of LoG peaks)
-    2. experimentThreshold from config
-    3. BigFISH automatic threshold
-    4. Manual override (threshold argument)
-
+    GPU-accelerated smFISH spot detection using Big-FISH and LoG filtering.
     Args:
-        config (dict): configuration dictionary
-        img_path (str): path to experiment image (optional, uses config if None)
-        threshold (float): override threshold (rarely needed)
-        results_folder (str): folder to save output
-
+        config (dict)
+        img_path (str)
+        threshold (float)
+        results_folder (str)
+        device (torch.device): if None, auto-detect GPU
     Returns:
         spots_exp (np.ndarray)
         exp_threshold_used (float)
@@ -231,11 +226,19 @@ def detect_spots_from_config(config, img_path=None, threshold=None, results_fold
     """
 
     import os
+    import numpy as np
+    import torch
     from tifffile import imread, imwrite
     from bigfish.stack import log_filter
     from bigfish.detection import detect_spots as bf_detect_spots
     from .spot_detection import control_peak_intensities, compute_control_threshold_from_peaks
-    import numpy as np
+
+    # ------------------------------
+    # Device setup
+    # ------------------------------
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     # ------------------------------
     # Initialize paths
@@ -257,8 +260,6 @@ def detect_spots_from_config(config, img_path=None, threshold=None, results_fold
         spots_all, peak_values, img_log_ctrl = control_peak_intensities(
             config["controlPath"], config, results_folder
         )
-
-        # Use 99th percentile as threshold
         control_threshold = compute_control_threshold_from_peaks(peak_values, percentile=99)
         print(f"Control-derived threshold (99th percentile of LoG peaks): {control_threshold}")
 
@@ -268,8 +269,11 @@ def detect_spots_from_config(config, img_path=None, threshold=None, results_fold
     img_exp = imread(img_path)
     print(f"Loaded experiment image: {img_exp.shape}")
 
+    # Move image to GPU as torch tensor if possible
+    img_tensor = torch.from_numpy(img_exp).float().to(device)
+
     # ------------------------------
-    # Step 3 — Decide which threshold to use
+    # Step 3 — Decide threshold
     # ------------------------------
     if control_threshold is not None:
         threshold_to_use = control_threshold
@@ -278,21 +282,20 @@ def detect_spots_from_config(config, img_path=None, threshold=None, results_fold
         threshold_to_use = config["experimentThreshold"]
         print(f"Using experimentThreshold from config: {threshold_to_use}")
     else:
-        threshold_to_use = None     # BigFISH auto threshold
-        print("Using BigFISH automatic threshold.")
+        threshold_to_use = None
+        print("Using Big-FISH automatic threshold.")
 
-    # ------------------------------
-    # Step 4 — Manual override
-    # ------------------------------
     if threshold is not None:
         threshold_to_use = threshold
-        print(f"Overriding threshold manually: {threshold_to_use}")
+        print(f"Manual override threshold: {threshold_to_use}")
 
     # ------------------------------
-    # Step 5 — Detect experiment spots
+    # Step 5 — Detect spots
     # ------------------------------
+    # Big-FISH detect_spots works on numpy arrays, so move back to CPU
+    img_cpu = img_tensor.cpu().numpy()
     spots_exp, exp_threshold_used = bf_detect_spots(
-        images=img_exp,
+        images=img_cpu,
         threshold=threshold_to_use,
         return_threshold=True,
         voxel_size=config["voxel_size"],
@@ -303,9 +306,9 @@ def detect_spots_from_config(config, img_path=None, threshold=None, results_fold
     print(f"Detected {len(spots_exp)} experiment spots (threshold={exp_threshold_used})")
 
     # ------------------------------
-    # Step 6 — Save results
+    # Step 6 — LoG filter + save results
     # ------------------------------
-    img_log_exp = log_filter(img_exp, config["kernel_size"])
+    img_log_exp = log_filter(img_cpu, config["kernel_size"])
     imwrite(os.path.join(results_folder, "experiment_LoG_filtered.tif"), img_log_exp)
     np.save(os.path.join(results_folder, "experiment_spots.npy"), spots_exp)
     print("Saved experiment LoG TIFF + NPY.")

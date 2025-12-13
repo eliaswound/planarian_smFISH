@@ -1,11 +1,12 @@
 #!/bin/bash
 #SBATCH --account=b1042
-#SBATCH --partition=genomics
+#SBATCH --partition=genomics-gpu
+#SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --mem=32
-#SBATCH --job-name=EG121225
-#SBATCH --output=EG12122501output.log
+#SBATCH --job-name=EG121225GPU
+#SBATCH --output=EG12122501outputGPU.log
 
 # Load environment
 $ module load python-miniconda3

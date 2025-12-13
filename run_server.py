@@ -4,9 +4,9 @@ Server mode entry point for smFISH detection pipeline.
 Author: Elias Guan
 """
 
-
 import os
 import argparse
+import torch  # <-- import torch for GPU detection
 from functions.io_utils import load_config, create_folder_in_same_directory
 from functions.spot_detection import detect_spots_from_config
 import numpy as np
@@ -34,10 +34,19 @@ def main():
     args = parse_arguments()
 
     # -------------------------------------------------
+    # Step 0.5: Force GPU usage if available
+    # -------------------------------------------------
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"GPU detected. Using device: {torch.cuda.get_device_name(device)}")
+    else:
+        device = torch.device("cpu")
+        print("No GPU detected. Using CPU.")
+
+    # -------------------------------------------------
     # Step 1: Load config.yaml
     # -------------------------------------------------
     if args.config is None:
-        # default = use config.yaml in same directory as script
         config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
         print(f"No config provided. Using default: {config_path}")
     else:
@@ -75,11 +84,12 @@ def main():
     print("--------------------------------------------------")
 
     # -------------------------------------------------
-    # Step 4: Run spot detection
+    # Step 4: Run spot detection (force GPU)
     # -------------------------------------------------
     spots_exp, threshold_used, img_log_exp = detect_spots_from_config(
         config,
-        results_folder=results_folder
+        results_folder=results_folder,
+        device=device  # <-- pass device to ensure GPU is used
     )
 
     # -------------------------------------------------

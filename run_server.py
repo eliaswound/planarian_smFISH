@@ -89,7 +89,6 @@ def main():
     spots_exp, threshold_used, img_log_exp = detect_spots_from_config(
         config,
         results_folder=results_folder,
-        device=device  # <-- pass device to ensure GPU is used
     )
 
     # -------------------------------------------------

@@ -13,25 +13,31 @@
 # Environment setup
 # -----------------------------
 module load python-miniconda3
-source activate /home/qgs8612/.conda/envs/smfish_env
+
+# Ensure conda works in non-interactive shell
+source ~/.bashrc         # Loads conda initialization
+conda activate smfish_env
 
 # -----------------------------
-# Diagnostics (VERY IMPORTANT)
+# GPU diagnostics (optional but recommended)
 # -----------------------------
 echo "===== NVIDIA-SMI ====="
 nvidia-smi
 
 echo "===== CUDA visible devices ====="
 python - <<EOF
-import torch
-print("CUDA available:", torch.cuda.is_available())
-print("CUDA device count:", torch.cuda.device_count())
-if torch.cuda.is_available():
-    print("GPU name:", torch.cuda.get_device_name(0))
+try:
+    import torch
+    print("CUDA available:", torch.cuda.is_available())
+    print("CUDA device count:", torch.cuda.device_count())
+    if torch.cuda.is_available():
+        print("GPU name:", torch.cuda.get_device_name(0))
+except ImportError:
+    print("Torch not installed or not found!")
 EOF
 
 # -----------------------------
-# Run pipeline
+# Run smFISH pipeline
 # -----------------------------
 python /home/qgs8612/planarian_smFISH/run_server.py \
   --config /home/qgs8612/planarian_smFISH/config.yaml

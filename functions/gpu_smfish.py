@@ -28,34 +28,35 @@ def gaussian_kernel_1d(sigma, device):
     kernel /= kernel.sum()
     return kernel
 
+
 def log_filter_gpu(image_np, sigma, device="cuda"):
     """3D Laplacian-of-Gaussian filter on GPU (Big-FISH style)."""
     device = torch.device(device)
-    x = torch.from_numpy(image_np).float().to(device).unsqueeze(0).unsqueeze(0)
+    x = torch.from_numpy(image_np).float().to(device).unsqueeze(0).unsqueeze(0)  # (1,1,Z,Y,X)
 
+    # Separable Gaussian smoothing
     sz, sy, sx = sigma
     kz = gaussian_kernel_1d(sz, device).view(1, 1, -1, 1, 1)
     ky = gaussian_kernel_1d(sy, device).view(1, 1, 1, -1, 1)
     kx = gaussian_kernel_1d(sx, device).view(1, 1, 1, 1, -1)
 
-    x = F.conv3d(x, kz, padding=(kz.shape[2]//2,0,0))
-    x = F.conv3d(x, ky, padding=(0,ky.shape[3]//2,0))
-    x = F.conv3d(x, kx, padding=(0,0,kx.shape[4]//2))
+    x = F.conv3d(x, kz, padding=(kz.shape[2] // 2, 0, 0))
+    x = F.conv3d(x, ky, padding=(0, ky.shape[3] // 2, 0))
+    x = F.conv3d(x, kx, padding=(0, 0, kx.shape[4] // 2))
 
-    # Laplacian approximation
-    lap = (
-        -6*x
-        + F.pad(x[:,:,1:], (0,0,0,0,0,1))
-        + F.pad(x[:,:,:-1], (0,0,0,0,1,0))
-        + F.pad(x[:,:,:,1:], (0,0,0,1,0,0))
-        + F.pad(x[:,:,:, :-1], (0,0,1,0,0,0))
-        + F.pad(x[:,:,:,:,1:], (0,1,0,0,0,0))
-        + F.pad(x[:,:,:,:,-1:], (1,0,0,0,0,0))
-    )
+    # 3x3x3 Laplacian kernel (approximate second derivative)
+    lap_kernel = torch.tensor(
+        [[[-1, -1, -1], [-1, 8, -1], [-1, -1, -1]]],
+        dtype=torch.float32, device=device
+    ).unsqueeze(0).unsqueeze(0)  # shape (1,1,1,3,3,3)
+
+    lap = F.conv3d(x, lap_kernel, padding=1)  # safe for any image size
 
     # σ² normalization (Big-FISH style)
-    lap *= sz**2 + sy**2 + sx**2
+    lap *= sz ** 2 + sy ** 2 + sx ** 2
+
     return lap.squeeze().cpu().numpy()
+
 
 # -----------------------------
 # Local minima detection

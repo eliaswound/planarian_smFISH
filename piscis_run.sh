@@ -29,24 +29,42 @@ export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages:$HOME/.local/lib/py
 echo "PYTHONPATH set to include user site-packages: $PYTHONPATH"
 
 # Check if JAX is available (JAX should already be installed in conda environment)
-# Use a Python script that properly handles import errors vs CUDA warnings
 echo "===== Checking JAX installation ====="
-$PYTHON - <<'PYEOF' 2>/dev/null
+# Test JAX import - capture both stdout and stderr, but only fail on ImportError
+JAX_TEST=$($PYTHON - <<'PYEOF' 2>&1
 import sys
 try:
     import jax
-    print(f'JAX version: {jax.__version__}')
-    sys.exit(0)  # Success
-except ImportError:
-    print("ERROR: JAX not found in Python environment.", file=sys.stderr)
-    sys.exit(1)  # Import failed
+    # If we get here, import succeeded
+    version = getattr(jax, '__version__', 'unknown')
+    print(f'SUCCESS: JAX version {version}')
+    sys.exit(0)
+except ImportError as e:
+    print(f'FAILED: ImportError - {e}', file=sys.stderr)
+    sys.exit(1)
 except Exception as e:
-    # JAX imported but other errors (like CUDA warnings) - that's OK
-    print(f'JAX version: {jax.__version__}')
-    sys.exit(0)  # Success (import worked, just warnings)
+    # Other exceptions (like CUDA errors) are OK - import succeeded
+    try:
+        version = getattr(jax, '__version__', 'unknown')
+        print(f'SUCCESS: JAX version {version} (with warnings)')
+        sys.exit(0)
+    except:
+        print(f'FAILED: Exception during import - {e}', file=sys.stderr)
+        sys.exit(1)
 PYEOF
+)
+JAX_EXIT=$?
 
-if [ $? -ne 0 ]; then
+# Show the output
+echo "$JAX_TEST"
+
+# Check if we got success message
+if echo "$JAX_TEST" | grep -q "SUCCESS:"; then
+    echo "JAX is installed and importable"
+elif [ $JAX_EXIT -eq 0 ]; then
+    # Exit code 0 but no SUCCESS message - might have worked anyway
+    echo "JAX check completed (exit code 0)"
+else
     echo "ERROR: JAX not found in Python environment."
     echo "Please install JAX in your conda environment:"
     echo "    conda activate smfish_env"

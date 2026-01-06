@@ -14,9 +14,14 @@ module load python-miniconda3
 # Commented out to avoid conflicts - using JAX from conda environment instead
 # module load jax-fem/0.0.8-gpu
 
-# Use the Python interpreter from your smfish_env conda environment (where Piscis is installed)
-PYTHON=/home/qgs8612/.conda/envs/smfish_env/bin/python
+# Initialize conda for bash shell and activate the environment
+eval "$(conda shell.bash hook)"
+conda activate smfish_env
+
+# Use Python from the activated conda environment
+PYTHON=$(which python)
 echo "Using Python: $PYTHON"
+echo "Python version: $($PYTHON --version)"
 
 # Ensure user site-packages (where pip --user installs) are visible to this interpreter
 # Include both 3.10 (preferred for this env) and 3.9 (in case prior installs were 3.9)

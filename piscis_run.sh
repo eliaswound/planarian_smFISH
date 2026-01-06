@@ -17,6 +17,10 @@ module load jax-fem/0.0.8-gpu
 PYTHON=/home/qgs8612/.conda/envs/smfish_env/bin/python
 echo "Using Python: $PYTHON"
 
+# Ensure user site-packages (where pip --user installs) are visible to this interpreter
+export PYTHONPATH="$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH"
+echo "PYTHONPATH set to include user site-packages: $PYTHONPATH"
+
 # Check if JAX is available, if not try to install it
 echo "===== Checking JAX installation ====="
 $PYTHON -c "import jax" 2>/dev/null

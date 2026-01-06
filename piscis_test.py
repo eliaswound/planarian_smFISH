@@ -14,6 +14,21 @@ import yaml
 import sys
 import json
 import time
+import os
+
+# Check JAX GPU availability
+try:
+    import jax
+    jax_devices = jax.devices()
+    gpu_available = any(d.device_kind == 'gpu' for d in jax_devices)
+    if gpu_available:
+        gpu_devices = [d for d in jax_devices if d.device_kind == 'gpu']
+        print(f"JAX GPU available: {[str(d) for d in gpu_devices]}")
+    else:
+        print("JAX GPU not available, will use CPU")
+except ImportError:
+    print("JAX not installed - GPU acceleration not available")
+    gpu_available = False
 
 try:
     import piscis
@@ -118,6 +133,21 @@ def predict_spots_piscis(image_path, output_dir, config):
     batch_size = config.get('batch_size', 1)
     device = config.get('device', 'cpu')  # 'cpu', 'gpu', or 'tpu'
     
+    # Check GPU availability for JAX
+    if device == 'gpu':
+        try:
+            import jax
+            devices = jax.devices()
+            gpu_devices = [d for d in devices if d.device_kind == 'gpu']
+            if len(gpu_devices) == 0:
+                print("Warning: GPU requested but no GPU devices found. Falling back to CPU.")
+                device = 'cpu'
+            else:
+                print(f"Found {len(gpu_devices)} GPU device(s): {[str(d) for d in gpu_devices]}")
+        except ImportError:
+            print("Warning: JAX not available. Falling back to CPU.")
+            device = 'cpu'
+    
     print(f"\nPiscis parameters:")
     print(f"  Model: {model_name if model_name else 'Default built-in model'}")
     print(f"  Batch size: {batch_size}")
@@ -153,13 +183,23 @@ def predict_spots_piscis(image_path, output_dir, config):
         # Add optional parameters
         if model_name:
             cmd.extend(['--model', model_name])
-        if device != 'cpu':
-            cmd.extend(['--device', device])
         if batch_size > 1:
             cmd.extend(['--batch-size', str(batch_size)])
         
+        # Set environment for GPU
+        env = os.environ.copy()
+        if device == 'gpu':
+            # JAX will automatically use GPU if available
+            # Set environment variable to ensure GPU is used
+            env['JAX_PLATFORM_NAME'] = 'gpu'
+            # Some Piscis versions might support --device flag
+            # Try adding it if your version supports it
+            # cmd.extend(['--device', 'gpu'])  # Uncomment if your version supports this
+        
         print(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        if device == 'gpu':
+            print(f"  Using GPU (JAX_PLATFORM_NAME=gpu)")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
         
         if result.stdout:
             print(f"Piscis output: {result.stdout}")

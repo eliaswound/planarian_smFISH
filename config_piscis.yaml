@@ -16,8 +16,9 @@ model_name: null  # Use default built-in model
 batch_size: 1
 
 # Device to use: 'cpu', 'gpu', or 'tpu'
+# Changed to GPU for JAX acceleration
 # Note: For GPU, you need JAX with GPU support installed
-device: "cpu"
+device: "gpu"
 
 # Spot plotting settings (same as config.yaml)
 plot_spot_size: 4

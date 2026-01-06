@@ -10,8 +10,9 @@
 #SBATCH --output=piscis_output.log
 
 module load python-miniconda3
-# Load JAX with GPU support via jax-fem module
-module load jax-fem/0.0.8-gpu
+# JAX is installed in the conda environment, so we don't need the jax-fem module
+# Commented out to avoid conflicts - using JAX from conda environment instead
+# module load jax-fem/0.0.8-gpu
 
 # Use the Python interpreter from your smfish_env conda environment (where Piscis is installed)
 PYTHON=/home/qgs8612/.conda/envs/smfish_env/bin/python
@@ -22,15 +23,15 @@ echo "Using Python: $PYTHON"
 export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages:$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH"
 echo "PYTHONPATH set to include user site-packages: $PYTHONPATH"
 
-# Check if JAX is available, if not try to install it
+# Check if JAX is available (JAX should already be installed in conda environment)
 echo "===== Checking JAX installation ====="
-$PYTHON -c "import jax" 2>/dev/null
+$PYTHON -c "import jax; print('JAX version:', jax.__version__)" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "JAX not found in Python environment, attempting to install..."
-    echo "Note: jax-fem module is loaded, but JAX may need to be installed in your Python environment"
-    $PYTHON -m pip install --user "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html || \
-    $PYTHON -m pip install --user jax jaxlib || \
-    echo "JAX installation failed, will try to continue..."
+    echo "ERROR: JAX not found in Python environment."
+    echo "Please install JAX in your conda environment:"
+    echo "    conda activate smfish_env"
+    echo "    pip install \"jax[cuda12]\" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+    exit 1
 fi
 
 # Check if Piscis is installed; if not, print a clear error (cannot auto-install because git is unavailable on compute nodes)
@@ -62,7 +63,7 @@ try:
         print("No GPU devices found, will use CPU")
 except ImportError as e:
     print(f"JAX not installed: {e}")
-    print("Make sure jax-fem module is loaded")
+    print("JAX should be installed in your conda environment")
 except Exception as e:
     print(f"Error checking JAX: {e}")
 EOF

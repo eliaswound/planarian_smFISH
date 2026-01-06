@@ -13,14 +13,8 @@ module load python-miniconda3
 # Load JAX with GPU support via jax-fem module
 module load jax-fem/0.0.8-gpu
 
-# Initialize conda for bash shell
-eval "$(conda shell.bash hook)"
-
-# Activate the conda environment
-conda activate smfish_env
-
-# Use Python from the activated conda environment
-PYTHON=$(which python)
+# Use the Python interpreter from your smfish_env conda environment (where Piscis is installed)
+PYTHON=/home/qgs8612/.conda/envs/smfish_env/bin/python
 echo "Using Python: $PYTHON"
 
 # Check if JAX is available, if not try to install it
@@ -34,12 +28,14 @@ if [ $? -ne 0 ]; then
     echo "JAX installation failed, will try to continue..."
 fi
 
-# Check if Piscis is installed, if not try to install it
+# Check if Piscis is installed; if not, print a clear error (cannot auto-install because git is unavailable on compute nodes)
 echo "===== Checking Piscis installation ====="
 $PYTHON -c "import piscis" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "Piscis not found, attempting to install..."
-    $PYTHON -m pip install --user git+https://github.com/zjniu/Piscis.git || echo "Piscis installation failed, continuing anyway..."
+    echo "ERROR: Piscis is not installed in $PYTHON."
+    echo "Please log into a login node, activate smfish_env, and run:"
+    echo "    pip install git+https://github.com/zjniu/Piscis.git"
+    exit 1
 fi
 
 # GPU diagnostics

@@ -31,8 +31,15 @@ echo "PYTHONPATH set to include user site-packages: $PYTHONPATH"
 # Check if JAX is available (JAX should already be installed in conda environment)
 echo "===== Checking JAX installation ====="
 # Test JAX import - capture both stdout and stderr, but only fail on ImportError
-JAX_TEST=$($PYTHON - <<'PYEOF' 2>&1
+# Use -I flag to ignore local imports (prevents importing from current directory)
+JAX_TEST=$($PYTHON -I - <<'PYEOF' 2>&1
 import sys
+import os
+# Remove current directory from sys.path to avoid importing local modules
+if '' in sys.path:
+    sys.path.remove('')
+if '.' in sys.path:
+    sys.path.remove('.')
 try:
     import jax
     # If we get here, import succeeded
@@ -74,7 +81,7 @@ fi
 
 # Check if Piscis is installed; if not, print a clear error (cannot auto-install because git is unavailable on compute nodes)
 echo "===== Checking Piscis installation ====="
-$PYTHON -c "import piscis" 2>/dev/null
+$PYTHON -I -c "import sys; sys.path = [p for p in sys.path if p not in ('', '.')]; import piscis" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "ERROR: Piscis is not installed in $PYTHON."
     echo "Please log into a login node, activate smfish_env, and run:"
@@ -87,7 +94,7 @@ echo "===== NVIDIA-SMI ====="
 nvidia-smi
 
 echo "===== JAX GPU Check ====="
-$PYTHON - <<EOF
+$PYTHON -I - <<EOF
 try:
     import jax
     print("JAX version:", jax.__version__ if hasattr(jax, '__version__') else 'unknown')
@@ -114,5 +121,7 @@ print("CUDA_VISIBLE_DEVICES:", cuda_visible)
 EOF
 
 # Run Piscis spot detection
-$PYTHON /home/qgs8612/planarian_smFISH/piscis_test.py
+# Change to script directory to ensure relative imports work, but use -I to ignore local numpy/etc
+cd /home/qgs8612/planarian_smFISH
+$PYTHON -I /home/qgs8612/planarian_smFISH/piscis_test.py
 

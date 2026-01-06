@@ -18,7 +18,8 @@ PYTHON=/home/qgs8612/.conda/envs/smfish_env/bin/python
 echo "Using Python: $PYTHON"
 
 # Ensure user site-packages (where pip --user installs) are visible to this interpreter
-export PYTHONPATH="$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH"
+# Include both 3.10 (preferred for this env) and 3.9 (in case prior installs were 3.9)
+export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages:$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH"
 echo "PYTHONPATH set to include user site-packages: $PYTHONPATH"
 
 # Check if JAX is available, if not try to install it

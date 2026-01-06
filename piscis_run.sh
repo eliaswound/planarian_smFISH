@@ -10,9 +10,9 @@
 #SBATCH --output=piscis_output.log
 
 module load python-miniconda3
-# JAX is installed in the conda environment, so we don't need the jax-fem module
-# Commented out to avoid conflicts - using JAX from conda environment instead
-# module load jax-fem/0.0.8-gpu
+# Load JAX with GPU support via jax-fem module FIRST
+# This sets up environment variables that make JAX available
+module load jax-fem/0.0.8-gpu
 
 # Initialize conda for bash shell and activate the environment
 eval "$(conda shell.bash hook)"
@@ -23,18 +23,17 @@ PYTHON=$(which python)
 echo "Using Python: $PYTHON"
 echo "Python version: $($PYTHON --version)"
 
-# Ensure user site-packages (where pip --user installs) are visible to this interpreter
-# Include both 3.10 (preferred for this env) and 3.9 (in case prior installs were 3.9)
-export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages:$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH"
-echo "PYTHONPATH set to include user site-packages: $PYTHONPATH"
+# The jax-fem module should have set up PYTHONPATH or other env vars
+# Let's check what it added
+echo "PYTHONPATH: $PYTHONPATH"
+echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
-# Check if JAX is available (JAX should already be installed in conda environment)
+# Check if JAX is available (should come from jax-fem module)
 echo "===== Checking JAX installation ====="
-# Test JAX import - capture both stdout and stderr, but only fail on ImportError
-# Use -I flag to ignore local imports (prevents importing from current directory)
-JAX_TEST=$($PYTHON -I - <<'PYEOF' 2>&1
+# Change to a clean directory to avoid importing from current directory
+cd /tmp
+JAX_TEST=$($PYTHON - <<'PYEOF' 2>&1
 import sys
-import os
 # Remove current directory from sys.path to avoid importing local modules
 if '' in sys.path:
     sys.path.remove('')
@@ -42,7 +41,6 @@ if '.' in sys.path:
     sys.path.remove('.')
 try:
     import jax
-    # If we get here, import succeeded
     version = getattr(jax, '__version__', 'unknown')
     print(f'SUCCESS: JAX version {version}')
     sys.exit(0)
@@ -73,15 +71,14 @@ elif [ $JAX_EXIT -eq 0 ]; then
     echo "JAX check completed (exit code 0)"
 else
     echo "ERROR: JAX not found in Python environment."
-    echo "Please install JAX in your conda environment:"
-    echo "    conda activate smfish_env"
-    echo "    pip install \"jax[cuda12]\" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+    echo "The jax-fem module should provide JAX. Check if module is loaded correctly."
     exit 1
 fi
 
 # Check if Piscis is installed; if not, print a clear error (cannot auto-install because git is unavailable on compute nodes)
 echo "===== Checking Piscis installation ====="
-$PYTHON -I -c "import sys; sys.path = [p for p in sys.path if p not in ('', '.')]; import piscis" 2>/dev/null
+cd /tmp
+$PYTHON -c "import sys; sys.path = [p for p in sys.path if p not in ('', '.')]; import piscis" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "ERROR: Piscis is not installed in $PYTHON."
     echo "Please log into a login node, activate smfish_env, and run:"
@@ -94,7 +91,8 @@ echo "===== NVIDIA-SMI ====="
 nvidia-smi
 
 echo "===== JAX GPU Check ====="
-$PYTHON -I - <<EOF
+cd /tmp
+$PYTHON - <<EOF
 try:
     import jax
     print("JAX version:", jax.__version__ if hasattr(jax, '__version__') else 'unknown')
@@ -108,7 +106,7 @@ try:
         print("No GPU devices found, will use CPU")
 except ImportError as e:
     print(f"JAX not installed: {e}")
-    print("JAX should be installed in your conda environment")
+    print("JAX should be provided by the jax-fem module")
 except Exception as e:
     print(f"Error checking JAX: {e}")
 EOF
@@ -121,7 +119,6 @@ print("CUDA_VISIBLE_DEVICES:", cuda_visible)
 EOF
 
 # Run Piscis spot detection
-# Change to script directory to ensure relative imports work, but use -I to ignore local numpy/etc
+# Change to script directory to ensure relative imports work
 cd /home/qgs8612/planarian_smFISH
-$PYTHON -I /home/qgs8612/planarian_smFISH/piscis_test.py
-
+$PYTHON /home/qgs8612/planarian_smFISH/piscis_test.py

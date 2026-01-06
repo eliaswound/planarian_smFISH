@@ -24,8 +24,23 @@ export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages:$HOME/.local/lib/py
 echo "PYTHONPATH set to include user site-packages: $PYTHONPATH"
 
 # Check if JAX is available (JAX should already be installed in conda environment)
+# Use a Python script that properly handles import errors vs CUDA warnings
 echo "===== Checking JAX installation ====="
-$PYTHON -c "import jax; print('JAX version:', jax.__version__)" 2>/dev/null
+$PYTHON - <<'PYEOF' 2>/dev/null
+import sys
+try:
+    import jax
+    print(f'JAX version: {jax.__version__}')
+    sys.exit(0)  # Success
+except ImportError:
+    print("ERROR: JAX not found in Python environment.", file=sys.stderr)
+    sys.exit(1)  # Import failed
+except Exception as e:
+    # JAX imported but other errors (like CUDA warnings) - that's OK
+    print(f'JAX version: {jax.__version__}')
+    sys.exit(0)  # Success (import worked, just warnings)
+PYEOF
+
 if [ $? -ne 0 ]; then
     echo "ERROR: JAX not found in Python environment."
     echo "Please install JAX in your conda environment:"

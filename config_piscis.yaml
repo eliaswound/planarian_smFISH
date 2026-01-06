@@ -1,0 +1,26 @@
+# config_piscis.yaml
+# Configuration file for Piscis spot detection
+
+# Input image path
+image_path: "/Volumes/Backup Plus/DL_210_data_analysis/Test image/12hr_Amputation_Image2_565.tif"
+
+# Output directory (will be created if it doesn't exist)
+output_dir: "/Volumes/Backup Plus/DL_210_data_analysis/Test image/piscis_results"
+
+# Piscis model settings
+# Set to null/None to use the default built-in model from Hugging Face
+# Or specify a custom model name/path
+model_name: null  # Use default built-in model
+
+# Batch size for processing (useful for large images)
+batch_size: 1
+
+# Device to use: 'cpu', 'gpu', or 'tpu'
+# Note: For GPU, you need JAX with GPU support installed
+device: "cpu"
+
+# Spot plotting settings (same as config.yaml)
+plot_spot_size: 4
+plotInnerCircle: false
+plotSpotLabel: false
+

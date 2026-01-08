@@ -39,6 +39,7 @@ def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None)
         Dataset dictionary from load_dataset()
     exclude_conditions : List[str], optional
         List of condition names to exclude (default: ['0hr_Amputation', '0hr_Incision'])
+        If empty list or None, no conditions will be excluded.
     
     Returns
     -------
@@ -49,6 +50,10 @@ def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None)
     """
     if exclude_conditions is None:
         exclude_conditions = ['0hr_Amputation', '0hr_Incision']
+    
+    # If exclude_conditions is an empty list, don't exclude anything
+    if exclude_conditions == []:
+        exclude_conditions = []
     
     all_images = []
     all_coords = []

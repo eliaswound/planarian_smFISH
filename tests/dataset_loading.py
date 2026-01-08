@@ -2,15 +2,19 @@
 Dataset loading script for experiment data structure.
 
 This script loads all images and spots from the following structure:
-/scratch/qgs8612/experiment/
-├── {condition}/          # e.g., 0hr_Amputation, 12hr_Incision
+/scratch/qgs8612/Experiment/
+├── {condition}/          # e.g., 6hr_Amputation, 12hr_Incision
 │   ├── Image1/
 │   │   ├── 565/
-│   │   │   ├── *.tif
+│   │   │   ├── {condition}_Image1_{wavelength}.tif
 │   │   │   └── results/
 │   │   │       └── spots_post_decomposition_and_background_removed.npy
 │   ├── Image2/...
 │   └── Image3/...
+
+Example:
+- Image: /scratch/qgs8612/Experiment/12hr_Amputation/Image1/565/12hr_Amputation_Image1_565.tif
+- Spots: /scratch/qgs8612/Experiment/12hr_Amputation/Image1/565/results/spots_post_decomposition_and_background_removed.npy
 """
 
 import os
@@ -20,7 +24,7 @@ import numpy as np
 from tifffile import imread
 
 
-def load_dataset(base_dir: str = "/scratch/qgs8612/experiment",
+def load_dataset(base_dir: str = "/scratch/qgs8612/Experiment",
                  wavelength: str = "565",
                  verbose: bool = True) -> Dict[str, Dict[str, np.ndarray]]:
     """
@@ -92,17 +96,16 @@ def load_dataset(base_dir: str = "/scratch/qgs8612/experiment",
                     print(f"  Warning: Image folder not found: {image_path}")
                 continue
             
-            # Find .tif file in the wavelength folder
-            tif_files = list(image_path.glob("*.tif"))
-            if len(tif_files) == 0:
-                if verbose:
-                    print(f"  Warning: No .tif file found in {image_path}")
-                continue
-            elif len(tif_files) > 1:
-                if verbose:
-                    print(f"  Warning: Multiple .tif files found in {image_path}, using first one")
+            # Construct exact image filename: {condition}_Image{number}_{wavelength}.tif
+            # Example: 12hr_Amputation_Image1_565.tif
+            image_number = image_name.replace("Image", "")  # Extract "1", "2", or "3"
+            tif_filename = f"{condition}_Image{image_number}_{wavelength}.tif"
+            tif_file = image_path / tif_filename
             
-            tif_file = tif_files[0]
+            if not tif_file.exists():
+                if verbose:
+                    print(f"  Warning: Image file not found: {tif_file}")
+                continue
             
             # Find corresponding spots file
             results_dir = image_path / "results"
@@ -209,7 +212,7 @@ def create_flat_arrays(dataset: Dict[str, Dict[str, np.ndarray]]) -> Dict[str, n
     return flat_data
 
 
-def load_dataset_as_arrays(base_dir: str = "/scratch/qgs8612/experiment",
+def load_dataset_as_arrays(base_dir: str = "/scratch/qgs8612/Experiment",
                            wavelength: str = "565",
                            verbose: bool = True,
                            return_dict: bool = False) -> Dict[str, List]:
@@ -248,7 +251,7 @@ def main():
     
     parser = argparse.ArgumentParser(description="Load experiment dataset")
     parser.add_argument("--base_dir", type=str, 
-                       default="/scratch/qgs8612/experiment",
+                       default="/scratch/qgs8612/Experiment",
                        help="Base directory path")
     parser.add_argument("--wavelength", type=str, default="565",
                        help="Wavelength folder to load (default: 565)")

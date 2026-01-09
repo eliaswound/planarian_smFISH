@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import numpy as np
 from tifffile import imread
+from glob import glob
 
 
 def load_dataset(base_dir: str = "/scratch/qgs8612/Experiment",
@@ -96,67 +97,69 @@ def load_dataset(base_dir: str = "/scratch/qgs8612/Experiment",
                     print(f"  Warning: Image folder not found: {image_path}")
                 continue
             
-            # Construct exact image filename: {condition}_Image{number}_{wavelength}.tif
-            # Example: 12hr_Amputation_Image1_565.tif
-            image_number = image_name.replace("Image", "")  # Extract "1", "2", or "3"
-            tif_filename = f"{condition}_Image{image_number}_{wavelength}.tif"
-            tif_file = image_path / tif_filename
+            # Use glob to find all .tif files in the wavelength folder
+            tif_pattern = str(image_path / "*.tif")
+            tif_files = glob(tif_pattern)
             
-            if not tif_file.exists():
+            if len(tif_files) == 0:
                 if verbose:
-                    print(f"  Warning: Image file not found: {tif_file}")
+                    print(f"  Warning: No .tif files found in: {image_path}")
                 continue
             
-            # Find corresponding spots file
-            results_dir = image_path / "results"
-            spots_file = results_dir / "spots_post_decomposition_and_background_removed.npy"
-            
-            if not spots_file.exists():
-                if verbose:
-                    print(f"  Warning: Spots file not found: {spots_file}")
-                # Still load the image even if spots are missing
-                try:
-                    img = imread(str(tif_file))
-                    condition_images.append(img)
-                    condition_spots.append(None)  # None for missing spots
-                    image_paths.append(str(tif_file))
-                    spots_paths.append(None)
+            # Process each .tif file found
+            for tif_file_path in sorted(tif_files):
+                tif_file = Path(tif_file_path)
+                
+                # Find corresponding spots file in results subdirectory
+                results_dir = image_path / "results"
+                spots_file = results_dir / "spots_post_decomposition_and_background_removed.npy"
+                
+                if not spots_file.exists():
                     if verbose:
-                        print(f"  ✓ Loaded: {image_name} (image only, no spots)")
+                        print(f"  Warning: Spots file not found: {spots_file}")
+                    # Still load the image even if spots are missing
+                    try:
+                        img = imread(str(tif_file))
+                        condition_images.append(img)
+                        condition_spots.append(None)  # None for missing spots
+                        image_paths.append(str(tif_file))
+                        spots_paths.append(None)
+                        if verbose:
+                            print(f"  ✓ Loaded: {tif_file.name} (image only, no spots)")
+                    except Exception as e:
+                        if verbose:
+                            print(f"  ✗ Error loading {tif_file.name}: {e}")
+                    continue
+                
+                # Load both image and spots
+                try:
+                    if verbose:
+                        print(f"  Loading {tif_file.name}...")
+                    
+                    # Load image
+                    img = imread(str(tif_file))
+                    if verbose:
+                        print(f"    Image shape: {img.shape}")
+                    
+                    # Load spots
+                    spots = np.load(str(spots_file))
+                    if verbose:
+                        print(f"    Spots shape: {spots.shape if spots.ndim > 0 else 'scalar'}")
+                        if spots.ndim > 0:
+                            print(f"    Number of spots: {len(spots)}")
+                    
+                    condition_images.append(img)
+                    condition_spots.append(spots)
+                    image_paths.append(str(tif_file))
+                    spots_paths.append(str(spots_file))
+                    
+                    if verbose:
+                        print(f"    ✓ Successfully loaded {tif_file.name}")
+                        
                 except Exception as e:
                     if verbose:
-                        print(f"  ✗ Error loading {image_name}: {e}")
-                continue
-            
-            # Load both image and spots
-            try:
-                if verbose:
-                    print(f"  Loading {image_name}...")
-                
-                # Load image
-                img = imread(str(tif_file))
-                if verbose:
-                    print(f"    Image shape: {img.shape}")
-                
-                # Load spots
-                spots = np.load(str(spots_file))
-                if verbose:
-                    print(f"    Spots shape: {spots.shape if spots.ndim > 0 else 'scalar'}")
-                    if spots.ndim > 0:
-                        print(f"    Number of spots: {len(spots)}")
-                
-                condition_images.append(img)
-                condition_spots.append(spots)
-                image_paths.append(str(tif_file))
-                spots_paths.append(str(spots_file))
-                
-                if verbose:
-                    print(f"    ✓ Successfully loaded {image_name}")
-                    
-            except Exception as e:
-                if verbose:
-                    print(f"  ✗ Error loading {image_name}: {e}")
-                continue
+                        print(f"  ✗ Error loading {tif_file.name}: {e}")
+                    continue
         
         # Store for this condition
         if len(condition_images) > 0:

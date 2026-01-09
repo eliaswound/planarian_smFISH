@@ -26,6 +26,12 @@ module load python-miniconda3
 # This sets up environment variables that make JAX available
 module load jax-fem/0.0.8-gpu
 
+# Force JAX to use CPU for dataset generation (GPU not needed and CUDA libraries may not be available)
+# Dataset generation is mostly I/O and data preparation, CPU is sufficient
+# Set this AFTER loading jax-fem module to override any GPU settings
+export JAX_PLATFORMS=cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
 # Initialize conda for bash shell and activate the environment
 eval "$(conda shell.bash hook)"
 conda activate smfish_env
@@ -34,6 +40,7 @@ conda activate smfish_env
 PYTHON=$(which python)
 echo "Using Python: $PYTHON"
 echo "Python version: $($PYTHON --version)"
+echo "JAX_PLATFORMS: $JAX_PLATFORMS (forced to CPU for dataset generation)"
 
 # The jax-fem module should have set up PYTHONPATH or other env vars
 echo "PYTHONPATH: $PYTHONPATH"
@@ -44,7 +51,10 @@ echo "===== Checking JAX installation ====="
 # Change to a clean directory to avoid importing from current directory
 cd /tmp
 JAX_TEST=$($PYTHON - <<'PYEOF' 2>&1
+import os
 import sys
+# Force CPU mode for JAX check
+os.environ['JAX_PLATFORMS'] = 'cpu'
 # Remove current directory from sys.path to avoid importing local modules
 if '' in sys.path:
     sys.path.remove('')
@@ -101,25 +111,23 @@ fi
 echo "===== NVIDIA-SMI ====="
 nvidia-smi
 
-echo "===== JAX GPU Check ====="
+echo "===== JAX Device Check (CPU mode) ====="
 cd /tmp
 $PYTHON - <<EOF
+import os
+os.environ['JAX_PLATFORMS'] = 'cpu'
 try:
     import jax
     print("JAX version:", jax.__version__ if hasattr(jax, '__version__') else 'unknown')
     devices = jax.devices()
     print("JAX devices:", [str(d) for d in devices])
-    gpu_devices = [d for d in devices if d.device_kind == 'gpu']
-    if gpu_devices:
-        print("GPU devices found:", [str(d) for d in gpu_devices])
-        print("JAX GPU is available!")
-    else:
-        print("No GPU devices found, will use CPU")
+    print("Using CPU mode for dataset generation (GPU not needed)")
 except ImportError as e:
     print(f"JAX not installed: {e}")
     print("JAX should be provided by the jax-fem module")
 except Exception as e:
     print(f"Error checking JAX: {e}")
+    print("Continuing with CPU mode...")
 EOF
 
 echo "===== CUDA visible devices ====="

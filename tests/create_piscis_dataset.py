@@ -8,6 +8,13 @@ This script:
 4. Generates a Piscis training dataset using piscis.data.generate_dataset()
 """
 
+import os
+# Set JAX to use CPU if not already set (for dataset generation, CPU is sufficient)
+# This prevents CUDA library errors during dataset generation
+# Must be set BEFORE importing jax
+if 'JAX_PLATFORMS' not in os.environ:
+    os.environ['JAX_PLATFORMS'] = 'cpu'
+
 import argparse
 from pathlib import Path
 from typing import List, Tuple
@@ -188,6 +195,16 @@ def generate_piscis_dataset(
     print(f"{'='*60}\n")
     
     # Generate JAX random key
+    # JAX_PLATFORMS should be set to 'cpu' by the bash script or at module import
+    # This prevents CUDA library initialization errors during dataset generation
+    if verbose:
+        try:
+            devices = jax.devices()
+            print(f"JAX devices available: {[str(d) for d in devices]}")
+        except Exception as e:
+            print(f"Warning: Could not check JAX devices: {e}")
+            print("Continuing with CPU mode...")
+    
     key = jax.random.PRNGKey(random_seed)
     
     # Generate dataset using Piscis

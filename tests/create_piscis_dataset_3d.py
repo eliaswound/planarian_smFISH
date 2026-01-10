@@ -135,14 +135,14 @@ def generate_piscis_dataset_3d(
     base_dir: str = "/scratch/qgs8612/Experiment",
     output_path: str = "/scratch/qgs8612/piscis_training_dataset_3d",
     wavelength: str = "565",
-    tile_size: Tuple[int, int, int] = (32, 256, 256),
+    tile_size: Tuple[int, int, int] = (16, 128, 128),
     min_spots: int = 1,
     train_size: float = 0.7,
     test_size: float = 0.15,
     random_seed: int = 42,
     exclude_conditions: List[str] = None,
     overlap_factor: float = 0.0,
-    batch_size: int = 5,
+    batch_size: int = 1,
     verbose: bool = True
 ):
     """
@@ -302,9 +302,9 @@ def main():
         "--tile_size",
         type=int,
         nargs=3,
-        default=[32, 256, 256],
+        default=[16, 128, 128],
         metavar=("DEPTH", "HEIGHT", "WIDTH"),
-        help="Tile size for splitting images (z y x)"
+        help="Tile size for splitting images (z y x). Default: (16, 128, 128) for memory efficiency. Original was (32, 256, 256)"
     )
     
     parser.add_argument(
@@ -353,8 +353,8 @@ def main():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=5,
-        help="Number of tiles to accumulate in memory before writing to disk. Lower = less memory. Default: 5 (very small for memory efficiency)"
+        default=1,
+        help="Number of tiles to accumulate before writing. Default: 1 (writes each tile immediately for minimal memory)"
     )
     
     parser.add_argument(

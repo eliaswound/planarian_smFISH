@@ -175,12 +175,12 @@ def generate_dataset_3d_from_paths(
     image_paths: List[str],
     coord_paths: List[str],
     key: jax.Array,
-    tile_size: Tuple[int, int, int] = (32, 256, 256),
+    tile_size: Tuple[int, int, int] = (16, 128, 128),
     min_spots: int = 1,
     train_size: float = 0.70,
     test_size: float = 0.15,
     overlap_factor: float = 0.0,
-    batch_size: int = 10,
+    batch_size: int = 1,
     verbose: bool = True
 ) -> None:
     """
@@ -345,34 +345,60 @@ def generate_dataset_3d_from_paths(
             'valid': {'tiles': [], 'coords': []}
         }
         
-        def flush_batch(split_name, tiles_list, coords_list, batch_counter, batch_file_lists):
-            """Save batch to temporary file immediately and track file paths"""
+        # Use a fixed number of batch files per split (cycling through them) to avoid creating thousands of files
+        MAX_BATCH_FILES_PER_SPLIT = 20  # Reuse same 20 files per split, cycling through them
+        batch_file_handles = {
+            'train': {'tiles_files': [], 'coords_files': [], 'current_idx': 0, 'counts': []},
+            'test': {'tiles_files': [], 'coords_files': [], 'current_idx': 0, 'counts': []},
+            'valid': {'tiles_files': [], 'coords_files': [], 'current_idx': 0, 'counts': []}
+        }
+        
+        # Pre-create fixed batch files for each split
+        for split_name in ['train', 'test', 'valid']:
+            for i in range(MAX_BATCH_FILES_PER_SPLIT):
+                batch_file_handles[split_name]['tiles_files'].append(
+                    os.path.join(tmpdir, f'{split_name}_tiles_fixed_{i}.npy'))
+                batch_file_handles[split_name]['coords_files'].append(
+                    os.path.join(tmpdir, f'{split_name}_coords_fixed_{i}.npy'))
+                batch_file_handles[split_name]['counts'].append(0)
+        
+        def flush_batch_cycled(split_name, tiles_list, coords_list, batch_file_handles):
+            """Save batch to a cycled file (reuse same files)"""
             if len(tiles_list) == 0:
                 return
             
-            # Create unique batch file names
-            batch_file_tiles = os.path.join(tmpdir, f'{split_name}_tiles_batch_{batch_counter}.npy')
-            batch_file_coords = os.path.join(tmpdir, f'{split_name}_coords_batch_{batch_counter}.npy')
+            # Get current file index for this split
+            idx = batch_file_handles[split_name]['current_idx']
+            batch_file_tiles = batch_file_handles[split_name]['tiles_files'][idx]
+            batch_file_coords = batch_file_handles[split_name]['coords_files'][idx]
             
-            # Convert to arrays and save immediately
+            # Convert to arrays
             tiles_array = np.empty(len(tiles_list), dtype=object)
             coords_array = np.empty(len(coords_list), dtype=object)
             tiles_array[:] = tiles_list
             coords_array[:] = coords_list
             
-            # Save immediately to free memory
+            # If file exists, load and append; otherwise create new
+            if os.path.exists(batch_file_tiles) and batch_file_handles[split_name]['counts'][idx] > 0:
+                existing_tiles = np.load(batch_file_tiles, allow_pickle=True)
+                existing_coords = np.load(batch_file_coords, allow_pickle=True)
+                tiles_array = np.concatenate([existing_tiles, tiles_array])
+                coords_array = np.concatenate([existing_coords, coords_array])
+                del existing_tiles, existing_coords
+            
+            # Save
             np.save(batch_file_tiles, tiles_array, allow_pickle=True)
             np.save(batch_file_coords, coords_array, allow_pickle=True)
+            batch_file_handles[split_name]['counts'][idx] += len(tiles_list)
             
-            # Track file paths
-            batch_file_lists[split_name]['tiles'].append(batch_file_tiles)
-            batch_file_lists[split_name]['coords'].append(batch_file_coords)
+            # Cycle to next file
+            batch_file_handles[split_name]['current_idx'] = (idx + 1) % MAX_BATCH_FILES_PER_SPLIT
             
-            # Clear lists and arrays immediately to free memory
+            # Clear lists immediately
             tiles_list.clear()
             coords_list.clear()
             del tiles_array, coords_array
-            gc.collect()  # Aggressive cleanup after each batch
+            gc.collect()
         
         # Process each tile
         for tile_idx, (img_idx, z_start, y_start, x_start) in enumerate(tile_metadata_shuffled):
@@ -423,26 +449,21 @@ def generate_dataset_3d_from_paths(
             tile_coords[:, 2] -= x_start
             
             # Add to appropriate split and flush immediately if batch is full
-            # Use very small batch size to minimize memory
             if tile_idx < train_end:
                 train_tiles.append(tile)
                 train_coords.append(tile_coords)
-                # Flush immediately when batch reaches size (don't wait)
                 if len(train_tiles) >= batch_size:
-                    flush_batch('train', train_tiles, train_coords, train_batch_count, batch_file_lists)
-                    train_batch_count += 1
+                    flush_batch_cycled('train', train_tiles, train_coords, batch_file_handles)
             elif tile_idx < test_end:
                 test_tiles.append(tile)
                 test_coords.append(tile_coords)
                 if len(test_tiles) >= batch_size:
-                    flush_batch('test', test_tiles, test_coords, test_batch_count, batch_file_lists)
-                    test_batch_count += 1
+                    flush_batch_cycled('test', test_tiles, test_coords, batch_file_handles)
             else:
                 valid_tiles.append(tile)
                 valid_coords.append(tile_coords)
                 if len(valid_tiles) >= batch_size:
-                    flush_batch('valid', valid_tiles, valid_coords, valid_batch_count, batch_file_lists)
-                    valid_batch_count += 1
+                    flush_batch_cycled('valid', valid_tiles, valid_coords, batch_file_handles)
             
             # Delete tile immediately (it's been copied to list already)
             del tile, tile_coords
@@ -454,117 +475,165 @@ def generate_dataset_3d_from_paths(
         if verbose:
             print(f"\n  Flushing remaining batches...")
         if len(train_tiles) > 0:
-            flush_batch('train', train_tiles, train_coords, train_batch_count, batch_file_lists)
+            flush_batch_cycled('train', train_tiles, train_coords, batch_file_handles)
         if len(test_tiles) > 0:
-            flush_batch('test', test_tiles, test_coords, test_batch_count, batch_file_lists)
+            flush_batch_cycled('test', test_tiles, test_coords, batch_file_handles)
         if len(valid_tiles) > 0:
-            flush_batch('valid', valid_tiles, valid_coords, valid_batch_count, batch_file_lists)
+            flush_batch_cycled('valid', valid_tiles, valid_coords, batch_file_handles)
         
-        # Combine batch files efficiently
+        # Collect list of non-empty batch files for each split
+        batch_file_lists = {
+            'train': {'tiles': [], 'coords': []},
+            'test': {'tiles': [], 'coords': []},
+            'valid': {'tiles': [], 'coords': []}
+        }
+        for split_name in ['train', 'test', 'valid']:
+            for i in range(MAX_BATCH_FILES_PER_SPLIT):
+                if batch_file_handles[split_name]['counts'][i] > 0:
+                    batch_file_lists[split_name]['tiles'].append(batch_file_handles[split_name]['tiles_files'][i])
+                    batch_file_lists[split_name]['coords'].append(batch_file_handles[split_name]['coords_files'][i])
+        
+        train_batch_count = len(batch_file_lists['train']['tiles'])
+        test_batch_count = len(batch_file_lists['test']['tiles'])
+        valid_batch_count = len(batch_file_lists['valid']['tiles'])
+        
+        # Ultra memory-efficient: Combine batches incrementally, save splits one at a time
+        # Initialize counts
+        train_count = 0
+        test_count = 0
+        valid_count = 0
+        
         if verbose:
-            print(f"\nStep 4: Combining {train_batch_count + test_batch_count + valid_batch_count} batches into final dataset...")
+            print(f"\nStep 4: Combining batches with minimal memory usage...")
+            print(f"  Total batch files: train={train_batch_count}, test={test_batch_count}, valid={valid_batch_count}")
         
-        def combine_batch_files(batch_file_list):
-            """Combine batch files efficiently with minimal memory usage - write directly to final file"""
-            if len(batch_file_list) == 0:
-                return np.empty(0, dtype=object)
-            
-            if len(batch_file_list) == 1:
-                # Single batch - load and return directly
-                result = np.load(batch_file_list[0], allow_pickle=True)
-                return result
-            
-            # For multiple batches, load and combine in smaller chunks to avoid memory spikes
-            # Load first batch
-            result = np.load(batch_file_list[0], allow_pickle=True)
-            
-            # Combine remaining batches one at a time
-            for i, batch_file in enumerate(batch_file_list[1:], 1):
-                arr = np.load(batch_file, allow_pickle=True)
-                # Concatenate incrementally
-                result = np.concatenate([result, arr])
-                del arr
-                # Force garbage collection after every batch to free memory immediately
-                gc.collect()
-            
-            return result
-        
-        # Combine and save each split separately to minimize peak memory
-        # Save each split to temporary file, then combine files (avoids keeping all in memory)
-        if verbose:
-            print(f"\nStep 4: Combining batches and creating final dataset...")
-            print(f"  Processing splits one at a time to minimize memory...")
-        
-        temp_train_file = os.path.join(tmpdir, 'temp_train.npz')
-        temp_test_file = os.path.join(tmpdir, 'temp_test.npz')
-        temp_valid_file = os.path.join(tmpdir, 'temp_valid.npz')
-        
-        # Process and save train split
-        if verbose:
-            print(f"  Combining and saving train split ({train_batch_count} batches)...")
+        # Process train split - combine incrementally, one batch at a time
         if len(batch_file_lists['train']['tiles']) > 0:
-            x_train = combine_batch_files(batch_file_lists['train']['tiles'])
-            y_train = combine_batch_files(batch_file_lists['train']['coords'])
-            np.savez_compressed(temp_train_file, x=x_train, y=y_train)
+            if verbose:
+                print(f"  Processing train split ({train_batch_count} batches)...")
+            x_train = None
+            for i, batch_file in enumerate(batch_file_lists['train']['tiles']):
+                arr = np.load(batch_file, allow_pickle=True)
+                if x_train is None:
+                    x_train = arr
+                else:
+                    x_train = np.concatenate([x_train, arr])
+                    del arr
+                if i % 5 == 0:  # More frequent GC
+                    gc.collect()
+            
+            y_train = None
+            for i, batch_file in enumerate(batch_file_lists['train']['coords']):
+                arr = np.load(batch_file, allow_pickle=True)
+                if y_train is None:
+                    y_train = arr
+                else:
+                    y_train = np.concatenate([y_train, arr])
+                    del arr
+                if i % 5 == 0:
+                    gc.collect()
+            
+            train_count = len(x_train)
+            # Save train split immediately
+            temp_train = os.path.join(tmpdir, 'train.npz')
+            np.savez_compressed(temp_train, x=x_train, y=y_train)
             del x_train, y_train
             batch_file_lists['train'] = {'tiles': [], 'coords': []}
+            gc.collect()
         else:
-            # Empty split
-            np.savez_compressed(temp_train_file, x=np.empty(0, dtype=object), y=np.empty(0, dtype=object))
-        gc.collect()
+            temp_train = os.path.join(tmpdir, 'train.npz')
+            np.savez_compressed(temp_train, x=np.empty(0, dtype=object), y=np.empty(0, dtype=object))
         
-        # Process and save test split
-        if verbose:
-            print(f"  Combining and saving test split ({test_batch_count} batches)...")
+        # Process test split
         if len(batch_file_lists['test']['tiles']) > 0:
-            x_test = combine_batch_files(batch_file_lists['test']['tiles'])
-            y_test = combine_batch_files(batch_file_lists['test']['coords'])
-            np.savez_compressed(temp_test_file, x=x_test, y=y_test)
+            if verbose:
+                print(f"  Processing test split ({test_batch_count} batches)...")
+            x_test = None
+            for i, batch_file in enumerate(batch_file_lists['test']['tiles']):
+                arr = np.load(batch_file, allow_pickle=True)
+                if x_test is None:
+                    x_test = arr
+                else:
+                    x_test = np.concatenate([x_test, arr])
+                    del arr
+                if i % 5 == 0:
+                    gc.collect()
+            
+            y_test = None
+            for i, batch_file in enumerate(batch_file_lists['test']['coords']):
+                arr = np.load(batch_file, allow_pickle=True)
+                if y_test is None:
+                    y_test = arr
+                else:
+                    y_test = np.concatenate([y_test, arr])
+                    del arr
+                if i % 5 == 0:
+                    gc.collect()
+            
+            test_count = len(x_test)
+            temp_test = os.path.join(tmpdir, 'test.npz')
+            np.savez_compressed(temp_test, x=x_test, y=y_test)
             del x_test, y_test
             batch_file_lists['test'] = {'tiles': [], 'coords': []}
+            gc.collect()
         else:
-            np.savez_compressed(temp_test_file, x=np.empty(0, dtype=object), y=np.empty(0, dtype=object))
-        gc.collect()
+            temp_test = os.path.join(tmpdir, 'test.npz')
+            np.savez_compressed(temp_test, x=np.empty(0, dtype=object), y=np.empty(0, dtype=object))
         
-        # Process and save validation split
-        if verbose:
-            print(f"  Combining and saving validation split ({valid_batch_count} batches)...")
+        # Process validation split
         if len(batch_file_lists['valid']['tiles']) > 0:
-            x_valid = combine_batch_files(batch_file_lists['valid']['tiles'])
-            y_valid = combine_batch_files(batch_file_lists['valid']['coords'])
-            np.savez_compressed(temp_valid_file, x=x_valid, y=y_valid)
+            if verbose:
+                print(f"  Processing validation split ({valid_batch_count} batches)...")
+            x_valid = None
+            for i, batch_file in enumerate(batch_file_lists['valid']['tiles']):
+                arr = np.load(batch_file, allow_pickle=True)
+                if x_valid is None:
+                    x_valid = arr
+                else:
+                    x_valid = np.concatenate([x_valid, arr])
+                    del arr
+                if i % 5 == 0:
+                    gc.collect()
+            
+            y_valid = None
+            for i, batch_file in enumerate(batch_file_lists['valid']['coords']):
+                arr = np.load(batch_file, allow_pickle=True)
+                if y_valid is None:
+                    y_valid = arr
+                else:
+                    y_valid = np.concatenate([y_valid, arr])
+                    del arr
+                if i % 5 == 0:
+                    gc.collect()
+            
+            valid_count = len(x_valid)
+            temp_valid = os.path.join(tmpdir, 'valid.npz')
+            np.savez_compressed(temp_valid, x=x_valid, y=y_valid)
             del x_valid, y_valid
             batch_file_lists['valid'] = {'tiles': [], 'coords': []}
+            gc.collect()
         else:
-            np.savez_compressed(temp_valid_file, x=np.empty(0, dtype=object), y=np.empty(0, dtype=object))
-        gc.collect()
+            temp_valid = os.path.join(tmpdir, 'valid.npz')
+            np.savez_compressed(temp_valid, x=np.empty(0, dtype=object), y=np.empty(0, dtype=object))
         
-        # Load each split from temp files and combine into final dataset
-        # This way we only have one split in memory at a time
+        # Finally, load the three temp files and combine (this is the only time all are in memory)
         if verbose:
-            print(f"  Combining splits into final dataset file...")
-        train_data = np.load(temp_train_file, allow_pickle=True)
-        test_data = np.load(temp_test_file, allow_pickle=True)
-        valid_data = np.load(temp_valid_file, allow_pickle=True)
+            print(f"  Creating final dataset file (loading compressed splits)...")
+        train_data = np.load(temp_train, allow_pickle=True)
+        test_data = np.load(temp_test, allow_pickle=True)
+        valid_data = np.load(temp_valid, allow_pickle=True)
         
-        # Save final combined dataset
-        np.savez_compressed(path, 
+        # Save final dataset
+        np.savez_compressed(path,
                            x_train=train_data['x'], y_train=train_data['y'],
                            x_test=test_data['x'], y_test=test_data['y'],
                            x_valid=valid_data['x'], y_valid=valid_data['y'])
         
-        # Free memory
         del train_data, test_data, valid_data
         gc.collect()
     
     if verbose:
-        # Reload just to get counts for final message
-        final_data = np.load(path, allow_pickle=True)
-        n_train = len(final_data['x_train'])
-        n_valid = len(final_data['x_valid'])
-        n_test = len(final_data['x_test'])
-        del final_data
         print(f"\n✓ Dataset saved to {path}")
-        print(f"  Training: {n_train} tiles")
-        print(f"  Validation: {n_valid} tiles")
-        print(f"  Test: {n_test} tiles")
+        print(f"  Training: {train_count} tiles")
+        print(f"  Validation: {valid_count} tiles")
+        print(f"  Test: {test_count} tiles")

@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --time=12:00:00
-#SBATCH --mem=64G
+#SBATCH --mem=256G
 #SBATCH --cpus-per-task=4
 #SBATCH --job-name=Piscis3D_dataset_generation
 #SBATCH --output=piscis3d_dataset_generation_output.log

@@ -5,6 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --time=12:00:00
 #SBATCH --mem=256G
+# Note: Memory optimized to process images one at a time
 #SBATCH --cpus-per-task=4
 #SBATCH --job-name=Piscis3D_dataset_generation
 #SBATCH --output=piscis3d_dataset_generation_output.log
@@ -113,6 +114,8 @@ $PYTHON tests/create_piscis_dataset_3d.py \
     --train_size $TRAIN_SIZE \
     --test_size $TEST_SIZE \
     --random_seed $RANDOM_SEED \
+    --overlap_factor 0.0 \
+    --batch_size 50 \
     --exclude 0hr_Amputation 0hr_Incision
 
 EXIT_CODE=$?

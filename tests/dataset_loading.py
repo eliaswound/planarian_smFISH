@@ -215,6 +215,110 @@ def create_flat_arrays(dataset: Dict[str, Dict[str, np.ndarray]]) -> Dict[str, n
     return flat_data
 
 
+def load_dataset_paths_only(base_dir: str = "/scratch/qgs8612/Experiment",
+                            wavelength: str = "565",
+                            verbose: bool = True) -> Dict[str, Dict[str, List[str]]]:
+    """
+    Load only file paths without loading images into memory.
+    Memory-efficient version for large datasets.
+    
+    Parameters
+    ----------
+    base_dir : str
+        Base directory path
+    wavelength : str
+        Wavelength folder to load from
+    verbose : bool
+        Whether to print progress information
+    
+    Returns
+    -------
+    Dict[str, Dict[str, List[str]]]
+        Dictionary with condition keys, each containing:
+        - 'image_paths': List of image file paths
+        - 'spots_paths': List of spots file paths
+    """
+    base_path = Path(base_dir)
+    
+    if not base_path.exists():
+        raise FileNotFoundError(f"Base directory not found: {base_dir}")
+    
+    conditions = [
+        "0hr_Amputation", "0hr_Incision",
+        "6hr_Amputation", "6hr_Incision",
+        "12hr_Amputation", "12hr_Incision"
+    ]
+    
+    images = ["Image1", "Image2", "Image3"]
+    
+    dataset = {}
+    
+    for condition in conditions:
+        condition_path = base_path / condition
+        
+        if not condition_path.exists():
+            if verbose:
+                print(f"Warning: Condition folder not found: {condition_path}")
+            continue
+        
+        condition_image_paths = []
+        condition_spots_paths = []
+        
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Scanning condition: {condition}")
+            print(f"{'='*60}")
+        
+        for image_name in images:
+            image_path = condition_path / image_name / wavelength
+            
+            if not image_path.exists():
+                if verbose:
+                    print(f"  Warning: Image folder not found: {image_path}")
+                continue
+            
+            # Use glob to find all .tif files
+            from glob import glob
+            tif_pattern = str(image_path / "*.tif")
+            tif_files = glob(tif_pattern)
+            
+            if len(tif_files) == 0:
+                if verbose:
+                    print(f"  Warning: No .tif files found in: {image_path}")
+                continue
+            
+            # Process each .tif file found
+            for tif_file_path in sorted(tif_files):
+                tif_file = Path(tif_file_path)
+                
+                # Find corresponding spots file
+                results_dir = image_path / "results"
+                spots_file = results_dir / "spots_post_decomposition_and_background_removed.npy"
+                
+                if not spots_file.exists():
+                    if verbose:
+                        print(f"  Warning: Spots file not found: {spots_file}, skipping {tif_file.name}")
+                    continue
+                
+                condition_image_paths.append(str(tif_file))
+                condition_spots_paths.append(str(spots_file))
+                
+                if verbose:
+                    print(f"  ✓ Found: {tif_file.name}")
+        
+        if len(condition_image_paths) > 0:
+            dataset[condition] = {
+                'image_paths': condition_image_paths,
+                'spots_paths': condition_spots_paths
+            }
+            
+            if verbose:
+                print(f"\n  Summary for {condition}:")
+                print(f"    Image/spot pairs: {len(condition_image_paths)}")
+    
+    return dataset
+
+
 def load_dataset_as_arrays(base_dir: str = "/scratch/qgs8612/Experiment",
                            wavelength: str = "565",
                            verbose: bool = True,

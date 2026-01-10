@@ -22,7 +22,7 @@ if str(piscis3d_path) not in sys.path:
 try:
     import jax
     import jax.numpy as jnp
-    from piscis3d.data import generate_dataset_3d
+    from piscis3d.data import generate_dataset_3d, generate_dataset_3d_from_paths
 except ImportError as e:
     print(f"Error importing Piscis3D modules: {e}")
     print("Make sure Piscis3D is properly set up.")
@@ -30,14 +30,14 @@ except ImportError as e:
 
 # Import dataset loading functions
 try:
-    from dataset_loading import load_dataset
+    from dataset_loading import load_dataset_paths_only
 except ImportError:
     import sys
     from pathlib import Path
     tests_dir = Path(__file__).parent
     if str(tests_dir) not in sys.path:
         sys.path.insert(0, str(tests_dir))
-    from dataset_loading import load_dataset
+    from dataset_loading import load_dataset_paths_only
 
 
 def prepare_data_for_piscis_3d(dataset: dict, exclude_conditions: List[str] = None) -> Tuple[List[np.ndarray], List[np.ndarray]]:
@@ -141,6 +141,8 @@ def generate_piscis_dataset_3d(
     test_size: float = 0.15,
     random_seed: int = 42,
     exclude_conditions: List[str] = None,
+    overlap_factor: float = 0.0,
+    batch_size: int = 100,
     verbose: bool = True
 ):
     """
@@ -174,19 +176,41 @@ def generate_piscis_dataset_3d(
     if 'JAX_PLATFORMS' not in os.environ:
         os.environ['JAX_PLATFORMS'] = 'cpu'
     
-    # Load dataset
+    # Load only file paths - don't load images into memory
     if verbose:
-        print("Loading dataset...")
-    dataset = load_dataset(base_dir=base_dir, wavelength=wavelength, verbose=verbose)
+        print("Loading dataset paths only (not loading images to save memory)...")
+    dataset = load_dataset_paths_only(base_dir=base_dir, wavelength=wavelength, verbose=verbose)
     
-    # Prepare images and coordinates
-    images, coords = prepare_data_for_piscis_3d(dataset, exclude_conditions=exclude_conditions)
+    # Collect image/coordinate paths from non-excluded conditions
+    image_paths = []
+    coord_paths = []
+    for condition, data in dataset.items():
+        if condition in (exclude_conditions or []):
+            if verbose:
+                print(f"Skipping {condition} (excluded)")
+            continue
+        
+        # Get paths from dataset
+        img_paths = data.get('image_paths', [])
+        spot_paths = data.get('spots_paths', [])
+        
+        # Both lists should be the same length
+        for img_path, spot_path in zip(img_paths, spot_paths):
+            image_paths.append(img_path)
+            coord_paths.append(spot_path)
+        
+        if verbose:
+            print(f"  {condition}: Added {len(img_paths)} image/spot pairs")
     
-    if len(images) == 0:
+    if len(image_paths) == 0:
         raise ValueError("No images found after filtering. Please check your data paths and exclusion criteria.")
     
-    if len(images) != len(coords):
-        raise ValueError(f"Mismatch between number of images ({len(images)}) and coordinates ({len(coords)})")
+    if len(image_paths) != len(coord_paths):
+        raise ValueError(f"Mismatch: {len(image_paths)} images but {len(coord_paths)} coordinate files")
+    
+    if verbose:
+        print(f"Found {len(image_paths)} images to process")
+        print("Processing images incrementally from disk to reduce memory usage...")
     
     # Create output directory
     output_dir = Path(output_path)
@@ -221,15 +245,19 @@ def generate_piscis_dataset_3d(
     if verbose:
         print("Calling piscis3d.data.generate_dataset_3d()...")
     try:
-        generate_dataset_3d(
+        # Process images incrementally from disk with memory optimization
+        generate_dataset_3d_from_paths(
             path=str(output_path),
-            images=images,
-            coords=coords,
+            image_paths=image_paths,
+            coord_paths=coord_paths,
             key=key,
             tile_size=tile_size,
             min_spots=min_spots,
             train_size=train_size,
-            test_size=test_size
+            test_size=test_size,
+            overlap_factor=overlap_factor,
+            batch_size=batch_size,
+            verbose=verbose
         )
         if verbose:
             print(f"\n✓ 3D Dataset successfully generated at: {output_path}")
@@ -314,6 +342,20 @@ def main():
     )
     
     parser.add_argument(
+        "--overlap_factor",
+        type=float,
+        default=0.0,
+        help="Tile overlap factor (0.0 = no overlap, 0.5 = 50%% overlap). Lower = fewer tiles = less memory. Default: 0.0"
+    )
+    
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=100,
+        help="Number of tiles to accumulate in memory before writing to disk. Lower = less memory. Default: 100"
+    )
+    
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress verbose output"
@@ -328,7 +370,7 @@ def main():
     # Convert tile_size to tuple
     tile_size = tuple(args.tile_size)
     
-    # Generate dataset
+    # Generate dataset with memory optimization parameters
     generate_piscis_dataset_3d(
         base_dir=args.base_dir,
         output_path=args.output_path,
@@ -339,6 +381,8 @@ def main():
         test_size=args.test_size,
         random_seed=args.random_seed,
         exclude_conditions=args.exclude if args.exclude else [],
+        overlap_factor=args.overlap_factor,
+        batch_size=args.batch_size,
         verbose=not args.quiet
     )
 

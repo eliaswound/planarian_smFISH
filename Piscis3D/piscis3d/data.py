@@ -1,6 +1,8 @@
 """
 3D Dataset generation for Piscis.
 Handles 3D images (z, y, x) and 3D coordinates (z, y, x).
+
+Memory-optimized version that processes images incrementally.
 """
 
 import jax
@@ -8,18 +10,23 @@ import numpy as np
 from jax import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import tempfile
+import os
+import gc
 
 from piscis3d.utils import remove_duplicate_coords_3d
+from tifffile import imread
 
 
-def generate_3d_tiles(
+def generate_3d_tiles_generator(
     image: np.ndarray,
     coords: np.ndarray,
     tile_size: Tuple[int, int, int] = (32, 256, 256),
-    min_spots: int = 1
-) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+    min_spots: int = 1,
+    overlap_factor: float = 0.5
+):
     """
-    Generate 3D tiles from a 3D image with associated coordinates.
+    Generator that yields 3D tiles one at a time to save memory.
     
     Parameters
     ----------
@@ -31,25 +38,25 @@ def generate_3d_tiles(
         Size of each tile (z, y, x)
     min_spots : int
         Minimum number of spots per tile
+    overlap_factor : float
+        Overlap factor (0.0 = no overlap, 0.5 = 50% overlap). Default 0.5.
+        Lower values generate fewer tiles and use less memory.
         
-    Returns
-    -------
-    tiles : List[np.ndarray]
-        List of 3D image tiles
-    tile_coords : List[np.ndarray]
-        List of coordinate arrays for each tile
+    Yields
+    ------
+    tile : np.ndarray
+        3D image tile
+    tile_coords : np.ndarray
+        Coordinate array for the tile
     """
     z_size, y_size, x_size = tile_size
     z_max, y_max, x_max = image.shape
     
-    tiles = []
-    tile_coords = []
-    
-    # Generate tiles with overlap
-    # Step size can be adjusted for more/less overlap
-    z_step = max(1, z_size // 2)
-    y_step = max(1, y_size // 2)
-    x_step = max(1, x_size // 2)
+    # Reduce overlap to generate fewer tiles (saves memory)
+    # Use larger step sizes based on overlap_factor
+    z_step = max(1, int(z_size * (1 - overlap_factor)))
+    y_step = max(1, int(y_size * (1 - overlap_factor)))
+    x_step = max(1, int(x_size * (1 - overlap_factor)))
     
     for z_start in range(0, z_max, z_step):
         for y_start in range(0, y_max, y_step):
@@ -58,8 +65,8 @@ def generate_3d_tiles(
                 y_end = min(y_start + y_size, y_max)
                 x_end = min(x_start + x_size, x_max)
                 
-                # Extract tile
-                tile = image[z_start:z_end, y_start:y_end, x_start:x_end]
+                # Extract tile (creates a view, not a copy initially)
+                tile = np.ascontiguousarray(image[z_start:z_end, y_start:y_end, x_start:x_end])
                 
                 # Pad tile if smaller than tile_size
                 if tile.shape != tile_size:
@@ -68,120 +75,23 @@ def generate_3d_tiles(
                     pad_x = x_size - tile.shape[2]
                     tile = np.pad(tile, ((0, pad_z), (0, pad_y), (0, pad_x)), mode='constant', constant_values=0)
                 
-                # Find coordinates within this tile
-                # Coordinates are in (z, y, x) format
+                # Find coordinates within this tile (vectorized)
                 mask = (
                     (coords[:, 0] >= z_start) & (coords[:, 0] < z_end) &
                     (coords[:, 1] >= y_start) & (coords[:, 1] < y_end) &
                     (coords[:, 2] >= x_start) & (coords[:, 2] < x_end)
                 )
-                tile_coords_subset = coords[mask].copy()
                 
-                # Adjust coordinates to tile-local coordinates
-                if len(tile_coords_subset) > 0:
+                if np.sum(mask) >= min_spots:
+                    tile_coords_subset = coords[mask].copy()
+                    # Adjust coordinates to tile-local coordinates
                     tile_coords_subset[:, 0] -= z_start
                     tile_coords_subset[:, 1] -= y_start
                     tile_coords_subset[:, 2] -= x_start
-                
-                # Only keep tiles with enough spots
-                if len(tile_coords_subset) >= min_spots:
-                    tiles.append(tile)
-                    tile_coords.append(tile_coords_subset)
-    
-    return tiles, tile_coords
+                    yield tile, tile_coords_subset
 
 
-def generate_dataset_3d(
-    path: str,
-    images: List[np.ndarray],
-    coords: List[np.ndarray],
-    key: jax.Array,
-    tile_size: Tuple[int, int, int] = (32, 256, 256),
-    min_spots: int = 1,
-    train_size: float = 0.70,
-    test_size: float = 0.15
-) -> None:
-    """
-    Generate a 3D dataset from images and spot coordinates.
-
-    Parameters
-    ----------
-    path : str
-        Path to save dataset.
-    images : List[np.ndarray]
-        List of 3D images with shape (z, y, x).
-    coords : List[np.ndarray]
-        List of ground truth spot coordinates with shape (n_spots, 3) where columns are (z, y, x).
-    key : jax.Array
-        Random key used for splitting the dataset into training, validation, and test sets.
-    tile_size : Tuple[int, int, int], optional
-        Tile size used for splitting images (z, y, x). Default is (32, 256, 256).
-    min_spots : int, optional
-        Minimum number of spots per tile. Default is 1.
-    train_size : float, optional
-        Fraction of dataset used for training. Default is 0.70.
-    test_size : float, optional
-        Fraction of dataset used for testing. Default is 0.15.
-    """
-    
-    # Remove duplicate coordinates.
-    for i in range(len(coords)):
-        coords[i] = remove_duplicate_coords_3d(coords[i])
-    
-    tiled_images_list = []
-    tiled_coords_list = []
-    
-    print(f"Generating 3D tiles from {len(images)} images...")
-    for idx, (image, c) in enumerate(zip(images, coords)):
-        if idx % 10 == 0:
-            print(f"  Processing image {idx+1}/{len(images)}...")
-        
-        # Validate image dimensions
-        if image.ndim != 3:
-            raise ValueError(f"Image {idx} has {image.ndim} dimensions, expected 3 (z, y, x)")
-        
-        # Validate coordinate dimensions
-        if c.ndim != 2 or c.shape[1] != 3:
-            raise ValueError(f"Coordinates for image {idx} have shape {c.shape}, expected (n_spots, 3)")
-        
-        # Generate 3D tiles
-        tiles, tile_coords = generate_3d_tiles(image, c, tile_size, min_spots)
-        
-        tiled_images_list.extend(tiles)
-        tiled_coords_list.extend(tile_coords)
-    
-    print(f"Generated {len(tiled_images_list)} tiles total")
-    
-    # Convert to numpy arrays
-    tiled_images = np.empty(len(tiled_images_list), dtype=object)
-    tiled_coords = np.empty(len(tiled_coords_list), dtype=object)
-    tiled_images[:] = tiled_images_list
-    tiled_coords[:] = tiled_coords_list
-    
-    # Randomly shuffle the tiles.
-    size = len(tiled_images)
-    perms = np.asarray(random.permutation(key, size))
-    tiled_images = tiled_images[perms]
-    tiled_coords = tiled_coords[perms]
-    
-    # Split the dataset into training, validation, and test sets.
-    split_indices = np.rint(np.cumsum((train_size, test_size)) * size).astype(int)
-    x_train = tiled_images[:split_indices[0]]
-    y_train = tiled_coords[:split_indices[0]]
-    x_valid = tiled_images[split_indices[1]:]
-    y_valid = tiled_coords[split_indices[1]:]
-    x_test = tiled_images[split_indices[0]:split_indices[1]]
-    y_test = tiled_coords[split_indices[0]:split_indices[1]]
-    
-    # Create the dataset dictionary.
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, x_train=x_train, y_train=y_train, x_valid=x_valid, y_valid=y_valid, x_test=x_test, y_test=y_test)
-    
-    print(f"Dataset saved to {path}")
-    print(f"  Training: {len(x_train)} tiles")
-    print(f"  Validation: {len(x_valid)} tiles")
-    print(f"  Test: {len(x_test)} tiles")
+# Old function removed - use generate_dataset_3d_from_paths instead for memory efficiency
 
 
 def load_datasets_3d(
@@ -258,3 +168,358 @@ def load_datasets_3d(
         dataset['test'] = test
     
     return dataset
+
+
+def generate_dataset_3d_from_paths(
+    path: str,
+    image_paths: List[str],
+    coord_paths: List[str],
+    key: jax.Array,
+    tile_size: Tuple[int, int, int] = (32, 256, 256),
+    min_spots: int = 1,
+    train_size: float = 0.70,
+    test_size: float = 0.15,
+    overlap_factor: float = 0.1,
+    batch_size: int = 200,
+    verbose: bool = True
+) -> None:
+    """
+    Generate a 3D dataset from image and coordinate file paths.
+    Memory-optimized: loads images one at a time from disk.
+
+    Parameters
+    ----------
+    path : str
+        Path to save dataset.
+    image_paths : List[str]
+        List of paths to 3D image files.
+    coord_paths : List[str]
+        List of paths to coordinate files (numpy arrays).
+    key : jax.Array
+        Random key used for splitting the dataset.
+    tile_size : Tuple[int, int, int], optional
+        Tile size (z, y, x). Default is (32, 256, 256).
+    min_spots : int, optional
+        Minimum number of spots per tile. Default is 1.
+    train_size : float, optional
+        Fraction for training. Default is 0.70.
+    test_size : float, optional
+        Fraction for testing. Default is 0.15.
+    overlap_factor : float, optional
+        Overlap factor (0.0 = no overlap). Lower = fewer tiles = less memory. Default is 0.1.
+    batch_size : int, optional
+        Tiles per batch before writing to disk. Default is 200.
+    verbose : bool, optional
+        Print progress. Default is True.
+    """
+    if verbose:
+        print(f"\n{'='*60}")
+        print("Memory-optimized 3D dataset generation from file paths")
+        print(f"{'='*60}")
+        print(f"  Processing {len(image_paths)} images")
+        print(f"  Tile size (z, y, x): {tile_size}")
+        print(f"  Overlap factor: {overlap_factor} (lower = fewer tiles)")
+        print(f"  Batch size: {batch_size} tiles")
+        print(f"  Min spots per tile: {min_spots}")
+    
+    # Step 1: Count tiles by scanning through images one at a time
+    if verbose:
+        print(f"\nStep 1: Scanning images to count valid tiles...")
+    total_tiles = 0
+    tile_metadata = []  # (image_idx, z_start, y_start, x_start)
+    
+    for img_idx, (img_path, coord_path) in enumerate(zip(image_paths, coord_paths)):
+        if verbose and img_idx % 2 == 0:
+            print(f"  Scanning image {img_idx+1}/{len(image_paths)}...", end='\r')
+        
+        # Load only this image and coordinates (process one at a time)
+        try:
+            image = imread(img_path)
+            coords = np.load(coord_path)
+        except Exception as e:
+            if verbose:
+                print(f"\n  Warning: Failed to load {img_path}: {e}, skipping")
+            continue
+        
+        # Validate
+        if image.ndim != 3:
+            if verbose:
+                print(f"\n  Warning: Image {img_idx} has {image.ndim} dims, expected 3, skipping")
+            continue
+        if coords.ndim != 2 or coords.shape[1] != 3:
+            if verbose:
+                print(f"\n  Warning: Coords {img_idx} have shape {coords.shape}, expected (n, 3), skipping")
+            continue
+        
+        # Remove duplicates
+        coords = remove_duplicate_coords_3d(coords.astype(np.float32))
+        
+        # Count tiles for this image (without storing the image)
+        z_size, y_size, x_size = tile_size
+        z_max, y_max, x_max = image.shape
+        z_step = max(1, int(z_size * (1 - overlap_factor)))
+        y_step = max(1, int(y_size * (1 - overlap_factor)))
+        x_step = max(1, int(x_size * (1 - overlap_factor)))
+        
+        for z_start in range(0, z_max, z_step):
+            for y_start in range(0, y_max, y_step):
+                for x_start in range(0, x_max, x_step):
+                    z_end = min(z_start + z_size, z_max)
+                    y_end = min(y_start + y_size, y_max)
+                    x_end = min(x_start + x_size, x_max)
+                    
+                    # Check spots without extracting tile
+                    mask = (
+                        (coords[:, 0] >= z_start) & (coords[:, 0] < z_end) &
+                        (coords[:, 1] >= y_start) & (coords[:, 1] < y_end) &
+                        (coords[:, 2] >= x_start) & (coords[:, 2] < x_end)
+                    )
+                    
+                    if np.sum(mask) >= min_spots:
+                        tile_metadata.append((img_idx, z_start, y_start, x_start))
+                        total_tiles += 1
+        
+        # Clear image from memory immediately and force garbage collection
+        del image, coords
+        if img_idx % 3 == 0:  # Force GC every few images to free memory aggressively
+            gc.collect()
+    
+    if verbose:
+        print(f"\n  Found {total_tiles} valid tiles from {len(image_paths)} images")
+    
+    if total_tiles == 0:
+        raise ValueError("No valid tiles found! Check your images and min_spots setting.")
+    
+    # Step 2: Shuffle tile indices
+    if verbose:
+        print(f"\nStep 2: Shuffling {total_tiles} tiles...")
+    perms = np.asarray(random.permutation(key, total_tiles))
+    tile_metadata_shuffled = [tile_metadata[i] for i in perms]
+    
+    # Calculate splits
+    split_indices = np.rint(np.cumsum((train_size, test_size)) * total_tiles).astype(int)
+    train_end = split_indices[0]
+    test_end = split_indices[1]
+    
+    if verbose:
+        print(f"  Train: 0-{train_end} ({train_end} tiles)")
+        print(f"  Test: {train_end}-{test_end} ({test_end - train_end} tiles)")
+        print(f"  Valid: {test_end}-{total_tiles} ({total_tiles - test_end} tiles)")
+    
+    # Step 3: Extract tiles incrementally and save in batches
+    if verbose:
+        print(f"\nStep 3: Extracting tiles and saving in batches...")
+    
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Use temporary directory for intermediate files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_tiles_file = os.path.join(tmpdir, 'train_tiles.npy')
+        train_coords_file = os.path.join(tmpdir, 'train_coords.npy')
+        test_tiles_file = os.path.join(tmpdir, 'test_tiles.npy')
+        test_coords_file = os.path.join(tmpdir, 'test_coords.npy')
+        valid_tiles_file = os.path.join(tmpdir, 'valid_tiles.npy')
+        valid_coords_file = os.path.join(tmpdir, 'valid_coords.npy')
+        
+        # Track current image in memory (load only when needed)
+        current_img_idx = None
+        current_image = None
+        current_coords = None
+        
+        # Batch accumulators and counters
+        train_tiles = []
+        train_coords = []
+        test_tiles = []
+        test_coords = []
+        valid_tiles = []
+        valid_coords = []
+        
+        train_batch_count = 0
+        test_batch_count = 0
+        valid_batch_count = 0
+        
+        batch_file_lists = {
+            'train': {'tiles': [], 'coords': []},
+            'test': {'tiles': [], 'coords': []},
+            'valid': {'tiles': [], 'coords': []}
+        }
+        
+        def flush_batch(split_name, tiles_list, coords_list, batch_counter, batch_file_lists):
+            """Save batch to temporary file and track file paths"""
+            if len(tiles_list) == 0:
+                return
+            
+            # Create unique batch file names
+            batch_file_tiles = os.path.join(tmpdir, f'{split_name}_tiles_batch_{batch_counter}.npy')
+            batch_file_coords = os.path.join(tmpdir, f'{split_name}_coords_batch_{batch_counter}.npy')
+            
+            tiles_array = np.empty(len(tiles_list), dtype=object)
+            coords_array = np.empty(len(coords_list), dtype=object)
+            tiles_array[:] = tiles_list
+            coords_array[:] = coords_list
+            
+            # Save this batch
+            np.save(batch_file_tiles, tiles_array)
+            np.save(batch_file_coords, coords_array)
+            
+            # Track file paths
+            batch_file_lists[split_name]['tiles'].append(batch_file_tiles)
+            batch_file_lists[split_name]['coords'].append(batch_file_coords)
+            
+            # Clear lists immediately to free memory
+            tiles_list.clear()
+            coords_list.clear()
+            del tiles_array, coords_array
+        
+        # Process each tile
+        for tile_idx, (img_idx, z_start, y_start, x_start) in enumerate(tile_metadata_shuffled):
+            if verbose and tile_idx % 500 == 0:
+                print(f"  Processing tile {tile_idx+1}/{total_tiles}...", end='\r')
+            
+            # Load image if not already loaded
+            if current_img_idx != img_idx:
+                # Explicitly free previous image from memory
+                if current_image is not None:
+                    del current_image
+                if current_coords is not None:
+                    del current_coords
+                current_image = None
+                current_coords = None
+                gc.collect()  # Force garbage collection
+                
+                # Load new image
+                img_path = image_paths[img_idx]
+                coord_path = coord_paths[img_idx]
+                current_image = imread(img_path)
+                current_coords = np.load(coord_path).astype(np.float32)
+                current_coords = remove_duplicate_coords_3d(current_coords)
+                current_img_idx = img_idx
+            
+            # Extract tile
+            z_end = min(z_start + tile_size[0], current_image.shape[0])
+            y_end = min(y_start + tile_size[1], current_image.shape[1])
+            x_end = min(x_start + tile_size[2], current_image.shape[2])
+            
+            tile = np.ascontiguousarray(current_image[z_start:z_end, y_start:y_end, x_start:x_end])
+            if tile.shape != tile_size:
+                pad_z = tile_size[0] - tile.shape[0]
+                pad_y = tile_size[1] - tile.shape[1]
+                pad_x = tile_size[2] - tile.shape[2]
+                tile = np.pad(tile, ((0, pad_z), (0, pad_y), (0, pad_x)), mode='constant', constant_values=0)
+            
+            # Extract and adjust coordinates
+            mask = (
+                (current_coords[:, 0] >= z_start) & (current_coords[:, 0] < z_end) &
+                (current_coords[:, 1] >= y_start) & (current_coords[:, 1] < y_end) &
+                (current_coords[:, 2] >= x_start) & (current_coords[:, 2] < x_end)
+            )
+            tile_coords = current_coords[mask].copy()
+            tile_coords[:, 0] -= z_start
+            tile_coords[:, 1] -= y_start
+            tile_coords[:, 2] -= x_start
+            
+            # Add to appropriate split and flush if batch is full
+            if tile_idx < train_end:
+                train_tiles.append(tile)
+                train_coords.append(tile_coords)
+                if len(train_tiles) >= batch_size:
+                    flush_batch('train', train_tiles, train_coords, train_batch_count, batch_file_lists)
+                    train_batch_count += 1
+                    gc.collect()  # Force GC after flushing
+            elif tile_idx < test_end:
+                test_tiles.append(tile)
+                test_coords.append(tile_coords)
+                if len(test_tiles) >= batch_size:
+                    flush_batch('test', test_tiles, test_coords, test_batch_count, batch_file_lists)
+                    test_batch_count += 1
+                    gc.collect()
+            else:
+                valid_tiles.append(tile)
+                valid_coords.append(tile_coords)
+                if len(valid_tiles) >= batch_size:
+                    flush_batch('valid', valid_tiles, valid_coords, valid_batch_count, batch_file_lists)
+                    valid_batch_count += 1
+                    gc.collect()
+            
+            # Delete tile immediately after appending (it's copied in the list)
+            del tile, tile_coords
+        
+        # Flush remaining batches
+        if verbose:
+            print(f"\n  Flushing remaining batches...")
+        if len(train_tiles) > 0:
+            flush_batch('train', train_tiles, train_coords, train_batch_count, batch_file_lists)
+        if len(test_tiles) > 0:
+            flush_batch('test', test_tiles, test_coords, test_batch_count, batch_file_lists)
+        if len(valid_tiles) > 0:
+            flush_batch('valid', valid_tiles, valid_coords, valid_batch_count, batch_file_lists)
+        
+        # Combine batch files efficiently
+        if verbose:
+            print(f"\nStep 4: Combining {train_batch_count + test_batch_count + valid_batch_count} batches into final dataset...")
+        
+        def combine_batch_files(batch_file_list):
+            """Combine batch files efficiently with minimal memory usage"""
+            if len(batch_file_list) == 0:
+                return np.empty(0, dtype=object)
+            
+            if len(batch_file_list) == 1:
+                result = np.load(batch_file_list[0], allow_pickle=True)
+                return result
+            
+            # Load files one at a time and combine incrementally to minimize peak memory
+            result = None
+            for i, batch_file in enumerate(batch_file_list):
+                arr = np.load(batch_file, allow_pickle=True)
+                if result is None:
+                    result = arr
+                else:
+                    # Combine with existing result
+                    result = np.concatenate([result, arr])
+                    del arr
+                    # Force garbage collection periodically
+                    if i % 5 == 0:
+                        gc.collect()
+            
+            return result
+        
+        # Combine batches for each split one at a time to minimize peak memory
+        if verbose:
+            print(f"  Combining train batches ({train_batch_count} files)...")
+        x_train = combine_batch_files(batch_file_lists['train']['tiles'])
+        y_train = combine_batch_files(batch_file_lists['train']['coords'])
+        gc.collect()  # Free memory after train split
+        
+        if verbose:
+            print(f"  Combining test batches ({test_batch_count} files)...")
+        x_test = combine_batch_files(batch_file_lists['test']['tiles'])
+        y_test = combine_batch_files(batch_file_lists['test']['coords'])
+        gc.collect()  # Free memory after test split
+        
+        if verbose:
+            print(f"  Combining validation batches ({valid_batch_count} files)...")
+        x_valid = combine_batch_files(batch_file_lists['valid']['tiles'])
+        y_valid = combine_batch_files(batch_file_lists['valid']['coords'])
+        gc.collect()  # Free memory after validation split
+        
+        # Save final dataset
+        if verbose:
+            print(f"  Saving final dataset file...")
+        np.savez_compressed(path, x_train=x_train, y_train=y_train, x_valid=x_valid, y_valid=y_valid, x_test=x_test, y_test=y_test)
+        
+        # Free all variables before exiting context
+        del x_train, y_train, x_test, y_test, x_valid, y_valid
+        gc.collect()
+    
+    if verbose:
+        # Reload just to get counts for final message
+        final_data = np.load(path, allow_pickle=True)
+        n_train = len(final_data['x_train'])
+        n_valid = len(final_data['x_valid'])
+        n_test = len(final_data['x_test'])
+        del final_data
+        print(f"\n✓ Dataset saved to {path}")
+        print(f"  Training: {n_train} tiles")
+        print(f"  Validation: {n_valid} tiles")
+        print(f"  Test: {n_test} tiles")

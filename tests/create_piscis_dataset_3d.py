@@ -135,7 +135,7 @@ def generate_piscis_dataset_3d(
     base_dir: str = "/scratch/qgs8612/Experiment",
     output_path: str = "/scratch/qgs8612/piscis_training_dataset_3d",
     wavelength: str = "565",
-    tile_size: Tuple[int, int, int] = (16, 128, 128),
+    tile_size: Tuple[int, int, int] = (8, 64, 64),
     min_spots: int = 1,
     train_size: float = 0.7,
     test_size: float = 0.15,
@@ -302,9 +302,9 @@ def main():
         "--tile_size",
         type=int,
         nargs=3,
-        default=[16, 128, 128],
+        default=[8, 64, 64],
         metavar=("DEPTH", "HEIGHT", "WIDTH"),
-        help="Tile size for splitting images (z y x). Default: (16, 128, 128) for memory efficiency. Original was (32, 256, 256)"
+        help="Tile size for splitting images (z y x). Default: (8, 64, 64) for minimal memory. Original was (32, 256, 256) - this is 64x smaller"
     )
     
     parser.add_argument(

@@ -5,21 +5,21 @@
 #SBATCH --nodes=1
 #SBATCH --time=12:00:00
 #SBATCH --mem=256G
-# Note: Ultra memory optimized with batch_size=1 (writes each tile immediately, minimal memory)
-# Tile size: (16, 128, 128) - 8x smaller than original
+# Note: Ultra memory optimized with batch_size=1 (writes each tile immediately)
+# Tile size: (8, 64, 64) - 64x smaller than original (32, 256, 256) = ~32KB per tile
 #SBATCH --cpus-per-task=4
 #SBATCH --job-name=Piscis3D_dataset_generation
 #SBATCH --output=piscis3d_dataset_generation_output.log
 #SBATCH --error=piscis3d_dataset_generation_error.log
 
 # Default parameters (can be overridden by command-line arguments)
-# Reduced tile size for memory efficiency: (16, 128, 128) instead of (32, 256, 256)
+# Ultra-reduced tile size for memory efficiency: (8, 64, 64) instead of (32, 256, 256) - 64x smaller!
 BASE_DIR=${1:-"/scratch/qgs8612/Experiment"}
 OUTPUT_PATH=${2:-"/scratch/qgs8612/piscis_training_dataset_3d"}
 WAVELENGTH=${3:-"565"}
-TILE_SIZE_Z=${4:-16}
-TILE_SIZE_Y=${5:-128}
-TILE_SIZE_X=${6:-128}
+TILE_SIZE_Z=${4:-8}
+TILE_SIZE_Y=${5:-64}
+TILE_SIZE_X=${6:-64}
 MIN_SPOTS=${7:-1}
 TRAIN_SIZE=${8:-0.7}
 TEST_SIZE=${9:-0.15}

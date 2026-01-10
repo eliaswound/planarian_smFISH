@@ -15,7 +15,8 @@ import os
 import gc
 
 from piscis3d.utils import remove_duplicate_coords_3d
-from tifffile import imread
+from tifffile import imread, TiffFile
+import tifffile
 
 
 def generate_3d_tiles_generator(
@@ -175,7 +176,7 @@ def generate_dataset_3d_from_paths(
     image_paths: List[str],
     coord_paths: List[str],
     key: jax.Array,
-    tile_size: Tuple[int, int, int] = (16, 128, 128),
+    tile_size: Tuple[int, int, int] = (8, 64, 64),
     min_spots: int = 1,
     train_size: float = 0.70,
     test_size: float = 0.15,
@@ -232,20 +233,28 @@ def generate_dataset_3d_from_paths(
         if verbose and img_idx % 2 == 0:
             print(f"  Scanning image {img_idx+1}/{len(image_paths)}...", end='\r')
         
-        # Load only this image and coordinates (process one at a time)
+        # Load coordinates and get image shape WITHOUT loading the full image
         try:
-            image = imread(img_path)
             coords = np.load(coord_path)
+            # Get image shape without loading entire image using TiffFile metadata
+            with TiffFile(img_path) as tif:
+                if len(tif.series) == 0:
+                    if verbose:
+                        print(f"\n  Warning: No series found in {img_path}, skipping")
+                    continue
+                series = tif.series[0]
+                if series.ndim != 3:
+                    if verbose:
+                        print(f"\n  Warning: Image {img_idx} has {series.ndim} dims, expected 3, skipping")
+                    continue
+                # Get shape from metadata - this doesn't load the image
+                z_max, y_max, x_max = series.shape
         except Exception as e:
             if verbose:
-                print(f"\n  Warning: Failed to load {img_path}: {e}, skipping")
+                print(f"\n  Warning: Failed to read {img_path}: {e}, skipping")
             continue
         
-        # Validate
-        if image.ndim != 3:
-            if verbose:
-                print(f"\n  Warning: Image {img_idx} has {image.ndim} dims, expected 3, skipping")
-            continue
+        # Validate coordinates
         if coords.ndim != 2 or coords.shape[1] != 3:
             if verbose:
                 print(f"\n  Warning: Coords {img_idx} have shape {coords.shape}, expected (n, 3), skipping")
@@ -254,9 +263,8 @@ def generate_dataset_3d_from_paths(
         # Remove duplicates
         coords = remove_duplicate_coords_3d(coords.astype(np.float32))
         
-        # Count tiles for this image (without storing the image)
+        # Count tiles for this image using only coordinates and image shape (no image loaded)
         z_size, y_size, x_size = tile_size
-        z_max, y_max, x_max = image.shape
         z_step = max(1, int(z_size * (1 - overlap_factor)))
         y_step = max(1, int(y_size * (1 - overlap_factor)))
         x_step = max(1, int(x_size * (1 - overlap_factor)))
@@ -279,9 +287,9 @@ def generate_dataset_3d_from_paths(
                         tile_metadata.append((img_idx, z_start, y_start, x_start))
                         total_tiles += 1
         
-        # Clear image from memory immediately and force garbage collection
-        del image, coords
-        if img_idx % 3 == 0:  # Force GC every few images to free memory aggressively
+        # Clear coordinates from memory
+        del coords
+        if img_idx % 3 == 0:
             gc.collect()
     
     if verbose:
@@ -290,25 +298,30 @@ def generate_dataset_3d_from_paths(
     if total_tiles == 0:
         raise ValueError("No valid tiles found! Check your images and min_spots setting.")
     
-    # Step 2: Shuffle tile indices
+    # Step 2: Group tiles by image first, then shuffle within each image's tiles
+    # This minimizes image reloading while still providing some randomness
     if verbose:
-        print(f"\nStep 2: Shuffling {total_tiles} tiles...")
-    perms = np.asarray(random.permutation(key, total_tiles))
-    tile_metadata_shuffled = [tile_metadata[i] for i in perms]
+        print(f"\nStep 2: Grouping tiles by image and preparing for extraction...")
+    tiles_by_image = {}
+    for tile_idx, (img_idx, z_start, y_start, x_start) in enumerate(tile_metadata):
+        if img_idx not in tiles_by_image:
+            tiles_by_image[img_idx] = []
+        tiles_by_image[img_idx].append((tile_idx, z_start, y_start, x_start))
     
-    # Calculate splits
-    split_indices = np.rint(np.cumsum((train_size, test_size)) * total_tiles).astype(int)
-    train_end = split_indices[0]
-    test_end = split_indices[1]
+    # Shuffle tiles within each image for some randomness
+    for img_idx in tiles_by_image.keys():
+        img_key = random.fold_in(key, img_idx)
+        perms = random.permutation(img_key, len(tiles_by_image[img_idx]))
+        tiles_by_image[img_idx] = [tiles_by_image[img_idx][i] for i in perms]
     
     if verbose:
-        print(f"  Train: 0-{train_end} ({train_end} tiles)")
-        print(f"  Test: {train_end}-{test_end} ({test_end - train_end} tiles)")
-        print(f"  Valid: {test_end}-{total_tiles} ({total_tiles - test_end} tiles)")
+        print(f"  Tiles grouped into {len(tiles_by_image)} images")
+        for img_idx in sorted(tiles_by_image.keys()):
+            print(f"    Image {img_idx}: {len(tiles_by_image[img_idx])} tiles")
     
-    # Step 3: Extract tiles incrementally and save in batches
+    # Step 3: Extract tiles image-by-image (process each 2GB image once, extract all its tiles)
     if verbose:
-        print(f"\nStep 3: Extracting tiles and saving in batches...")
+        print(f"\nStep 3: Extracting tiles image-by-image (one 2GB image at a time)...")
     
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -322,10 +335,13 @@ def generate_dataset_3d_from_paths(
         valid_tiles_file = os.path.join(tmpdir, 'valid_tiles.npy')
         valid_coords_file = os.path.join(tmpdir, 'valid_coords.npy')
         
-        # Track current image in memory (load only when needed)
+        # Track current image - use memory mapping to avoid loading full 2GB images
         current_img_idx = None
-        current_image = None
+        current_tif_file = None  # Keep TiffFile handle open for metadata
+        current_mmap_array = None  # Memory-mapped array (reused for all tiles from same image)
+        current_image_shape = None
         current_coords = None
+        current_img_path = None
         
         # Batch accumulators and counters
         train_tiles = []
@@ -400,55 +416,143 @@ def generate_dataset_3d_from_paths(
             del tiles_array, coords_array
             gc.collect()
         
-        # Process each tile
-        for tile_idx, (img_idx, z_start, y_start, x_start) in enumerate(tile_metadata_shuffled):
-            if verbose and tile_idx % 500 == 0:
-                print(f"  Processing tile {tile_idx+1}/{total_tiles}...", end='\r')
+        # Process each image separately: load once, extract all tiles, save immediately, then move to next
+        # This way we never keep more than one 2GB image in memory at a time
+        global_tile_counter = 0
+        tile_split_assignments = []  # Will store (tile_file, split_name) for later assignment
+        
+        # First pass: Extract all tiles from each image and save them to individual files
+        # This avoids keeping tiles in memory
+        for img_idx in sorted(tiles_by_image.keys()):
+            n_tiles_for_img = len(tiles_by_image[img_idx])
+            if verbose:
+                print(f"  Processing image {img_idx+1}/{len(tiles_by_image)}: {n_tiles_for_img} tiles...", end='\r')
             
-            # Load image if not already loaded
-            if current_img_idx != img_idx:
-                # Explicitly free previous image from memory
-                if current_image is not None:
-                    del current_image
-                if current_coords is not None:
-                    del current_coords
-                current_image = None
-                current_coords = None
-                gc.collect()  # Force garbage collection
+            img_path = image_paths[img_idx]
+            coord_path = coord_paths[img_idx]
+            
+            try:
+                # Get shape from metadata (doesn't load image)
+                tif_file = TiffFile(img_path)
+                series = tif_file.series[0]
+                image_shape = series.shape
                 
-                # Load new image
-                img_path = image_paths[img_idx]
-                coord_path = coord_paths[img_idx]
-                current_image = imread(img_path)
-                current_coords = np.load(coord_path).astype(np.float32)
-                current_coords = remove_duplicate_coords_3d(current_coords)
-                current_img_idx = img_idx
+                # Try memory mapping - if it works, we can slice efficiently
+                mmap_array = None
+                try:
+                    mmap_array = tifffile.memmap(img_path)
+                except Exception as e:
+                    if verbose:
+                        print(f"\n  Warning: memmap failed, using page-by-page: {e}")
+                
+                # Load coordinates (small, not a problem)
+                coords = np.load(coord_path).astype(np.float32)
+                coords = remove_duplicate_coords_3d(coords)
+                
+                # Extract and save each tile immediately (don't accumulate)
+                for local_tile_idx, (z_start, y_start, x_start) in enumerate(tiles_by_image[img_idx]):
+                    z_end = min(z_start + tile_size[0], image_shape[0])
+                    y_end = min(y_start + tile_size[1], image_shape[1])
+                    x_end = min(x_start + tile_size[2], image_shape[2])
+                    
+                    # Extract tile using memory mapping or page-by-page
+                    if mmap_array is not None:
+                        tile = np.ascontiguousarray(mmap_array[z_start:z_end, y_start:y_end, x_start:x_end]).astype(np.float32)
+                    else:
+                        # Page-by-page fallback
+                        tile_pages = []
+                        for z_page in range(z_start, z_end):
+                            if z_page < len(series.pages):
+                                page_data = series.pages[z_page].asarray()
+                                tile_pages.append(page_data[y_start:y_end, x_start:x_end])
+                        if tile_pages:
+                            tile = np.stack(tile_pages, axis=0).astype(np.float32)
+                        else:
+                            tile = np.zeros((z_end - z_start, y_end - y_start, x_end - x_start), dtype=np.float32)
+                    
+                    # Pad if needed
+                    if tile.shape != tile_size:
+                        pad_z = tile_size[0] - tile.shape[0]
+                        pad_y = tile_size[1] - tile.shape[1]
+                        pad_x = tile_size[2] - tile.shape[2]
+                        tile = np.pad(tile, ((0, pad_z), (0, pad_y), (0, pad_x)), mode='constant', constant_values=0)
+                    
+                    # Extract coordinates
+                    mask = (
+                        (coords[:, 0] >= z_start) & (coords[:, 0] < z_end) &
+                        (coords[:, 1] >= y_start) & (coords[:, 1] < y_end) &
+                        (coords[:, 2] >= x_start) & (coords[:, 2] < x_end)
+                    )
+                    tile_coords = coords[mask].copy()
+                    tile_coords[:, 0] -= z_start
+                    tile_coords[:, 1] -= y_start
+                    tile_coords[:, 2] -= x_start
+                    
+                    # Save tile immediately to a temporary file (one file per tile)
+                    tile_file = os.path.join(tmpdir, f'tile_{global_tile_counter}.npy')
+                    coord_file = os.path.join(tmpdir, f'coords_{global_tile_counter}.npy')
+                    np.save(tile_file, tile)
+                    np.save(coord_file, tile_coords)
+                    
+                    # Store file paths (original_idx not needed since we'll shuffle file paths)
+                    tile_split_assignments.append((tile_file, coord_file))
+                    
+                    global_tile_counter += 1
+                    del tile, tile_coords
+                    
+                    # GC every 10 tiles
+                    if local_tile_idx % 10 == 0:
+                        gc.collect()
+                
+                # Close image resources immediately
+                if mmap_array is not None:
+                    del mmap_array
+                tif_file.close()
+                del coords
+                gc.collect()
+                
+            except Exception as e:
+                if verbose:
+                    print(f"\n  Error processing image {img_idx}: {e}, skipping")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        if verbose:
+            print(f"\n  Extracted {global_tile_counter} tiles total, saved to individual files")
+        
+        # Shuffle tile file assignments
+        if verbose:
+            print(f"\nStep 4: Shuffling {global_tile_counter} tile files...")
+        shuffle_key = random.split(key, 1)[0]
+        perms = np.asarray(random.permutation(shuffle_key, len(tile_split_assignments)))
+        tile_split_assignments_shuffled = [tile_split_assignments[i] for i in perms]
+        del tile_split_assignments
+        gc.collect()
+        
+        # Calculate splits
+        split_indices = np.rint(np.cumsum((train_size, test_size)) * global_tile_counter).astype(int)
+        train_end = split_indices[0]
+        test_end = split_indices[1]
+        
+        if verbose:
+            print(f"  Train: 0-{train_end} ({train_end} tiles)")
+            print(f"  Test: {train_end}-{test_end} ({test_end - train_end} tiles)")
+            print(f"  Valid: {test_end}-{global_tile_counter} ({global_tile_counter - test_end} tiles)")
+        
+        # Step 5: Load tiles from files and assign to splits (load one at a time)
+        if verbose:
+            print(f"\nStep 5: Loading tiles from files and assigning to splits...")
+        
+        for tile_idx, (tile_file, coord_file) in enumerate(tile_split_assignments_shuffled):
+            if verbose and tile_idx % 500 == 0:
+                print(f"  Loading tile {tile_idx+1}/{global_tile_counter}...", end='\r')
             
-            # Extract tile - convert to float32 immediately to reduce memory
-            z_end = min(z_start + tile_size[0], current_image.shape[0])
-            y_end = min(y_start + tile_size[1], current_image.shape[1])
-            x_end = min(x_start + tile_size[2], current_image.shape[2])
+            # Load tile from file (only one tile in memory at a time)
+            tile = np.load(tile_file)
+            tile_coords = np.load(coord_file)
             
-            # Extract and convert to float32 to reduce memory footprint
-            tile = np.ascontiguousarray(current_image[z_start:z_end, y_start:y_end, x_start:x_end]).astype(np.float32)
-            if tile.shape != tile_size:
-                pad_z = tile_size[0] - tile.shape[0]
-                pad_y = tile_size[1] - tile.shape[1]
-                pad_x = tile_size[2] - tile.shape[2]
-                tile = np.pad(tile, ((0, pad_z), (0, pad_y), (0, pad_x)), mode='constant', constant_values=0)
-            
-            # Extract and adjust coordinates
-            mask = (
-                (current_coords[:, 0] >= z_start) & (current_coords[:, 0] < z_end) &
-                (current_coords[:, 1] >= y_start) & (current_coords[:, 1] < y_end) &
-                (current_coords[:, 2] >= x_start) & (current_coords[:, 2] < x_end)
-            )
-            tile_coords = current_coords[mask].copy()
-            tile_coords[:, 0] -= z_start
-            tile_coords[:, 1] -= y_start
-            tile_coords[:, 2] -= x_start
-            
-            # Add to appropriate split and flush immediately if batch is full
+            # Assign to split and flush immediately
             if tile_idx < train_end:
                 train_tiles.append(tile)
                 train_coords.append(tile_coords)
@@ -465,11 +569,12 @@ def generate_dataset_3d_from_paths(
                 if len(valid_tiles) >= batch_size:
                     flush_batch_cycled('valid', valid_tiles, valid_coords, batch_file_handles)
             
-            # Delete tile immediately (it's been copied to list already)
             del tile, tile_coords
-            # Force GC every 10 tiles to keep memory low
             if tile_idx % 10 == 0:
                 gc.collect()
+        
+        del tile_split_assignments_shuffled
+        gc.collect()
         
         # Flush remaining batches
         if verbose:
@@ -504,7 +609,7 @@ def generate_dataset_3d_from_paths(
         valid_count = 0
         
         if verbose:
-            print(f"\nStep 4: Combining batches with minimal memory usage...")
+            print(f"\nStep 6: Combining batches with minimal memory usage...")
             print(f"  Total batch files: train={train_batch_count}, test={test_batch_count}, valid={valid_batch_count}")
         
         # Process train split - combine incrementally, one batch at a time

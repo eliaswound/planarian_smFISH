@@ -23,6 +23,7 @@ try:
     import jax
     import jax.numpy as jnp
     from piscis3d.data import generate_dataset_3d_from_paths
+    from piscis3d.data_streaming import generate_dataset_3d_streaming
 except ImportError as e:
     print(f"Error importing Piscis3D modules: {e}")
     print("Make sure Piscis3D is properly set up.")
@@ -243,31 +244,60 @@ def generate_piscis_dataset_3d(
     
     key = jax.random.PRNGKey(random_seed)
     
-    # Generate dataset using Piscis3D (memory-optimized version)
-    if verbose:
-        print("Calling piscis3d.data.generate_dataset_3d_from_paths()...")
-    try:
-        # Process images incrementally from disk with memory optimization
-        generate_dataset_3d_from_paths(
-            path=str(output_path),
-            image_paths=image_paths,
-            coord_paths=coord_paths,
-            key=key,
-            tile_size=tile_size,
-            min_spots=min_spots,
-            train_size=train_size,
-            test_size=test_size,
-            overlap_factor=overlap_factor,
-            batch_size=batch_size,
-            verbose=verbose
-        )
+    # Choose dataset generation method based on expected size
+    use_streaming = True  # Use streaming by default for large datasets
+    
+    if use_streaming:
         if verbose:
-            print(f"\n✓ 3D Dataset successfully generated at: {output_path}")
-    except Exception as e:
-        print(f"\n✗ Error generating 3D dataset: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+            print("Using STREAMING dataset generation (memory efficient)...")
+        try:
+            # Use streaming approach - saves batches without loading everything
+            generate_dataset_3d_streaming(
+                output_dir=str(output_path),
+                image_paths=image_paths,
+                coord_paths=coord_paths,
+                key=key,
+                tile_size=tile_size,
+                min_spots=min_spots,
+                train_size=train_size,
+                test_size=test_size,
+                overlap_factor=overlap_factor,
+                max_tiles_per_image=500,  # Limit tiles per image to reduce memory
+                verbose=verbose
+            )
+            if verbose:
+                print(f"\n✓ 3D Streaming Dataset successfully generated at: {output_path}")
+                print(f"  This format can be loaded incrementally during training")
+        except Exception as e:
+            print(f"\n✗ Error generating streaming 3D dataset: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    else:
+        if verbose:
+            print("Using STANDARD dataset generation...")
+        try:
+            # Process images incrementally from disk with memory optimization
+            generate_dataset_3d_from_paths(
+                path=str(output_path),
+                image_paths=image_paths,
+                coord_paths=coord_paths,
+                key=key,
+                tile_size=tile_size,
+                min_spots=min_spots,
+                train_size=train_size,
+                test_size=test_size,
+                overlap_factor=overlap_factor,
+                batch_size=batch_size,
+                verbose=verbose
+            )
+            if verbose:
+                print(f"\n✓ 3D Dataset successfully generated at: {output_path}")
+        except Exception as e:
+            print(f"\n✗ Error generating 3D dataset: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
 
 def main():

@@ -1,44 +1,48 @@
 """
-Create Piscis training dataset from experiment data.
+Create 3D Piscis training dataset from experiment data.
 
 This script:
-1. Loads all images and spots using dataset_loading.py
-2. Excludes 0hr conditions (0hr_Amputation, 0hr_Incision)
-3. Combines all remaining data (6hr and 12hr conditions)
-4. Generates a Piscis training dataset using piscis.data.generate_dataset()
+1. Loads all 3D images and spots using dataset_loading.py
+2. Excludes specified conditions (default: 0hr conditions)
+3. Generates a 3D Piscis training dataset using custom 3D tiling
 """
 
-import os
-# Set JAX to use CPU if not already set (for dataset generation, CPU is sufficient)
-# This prevents CUDA library errors during dataset generation
-# Must be set BEFORE importing jax
-if 'JAX_PLATFORMS' not in os.environ:
-    os.environ['JAX_PLATFORMS'] = 'cpu'
-
 import argparse
+import os
+import sys
 from pathlib import Path
 from typing import List, Tuple
 import numpy as np
-import jax
-import jax.numpy as jnp
+
+# Add Piscis3D to path
+piscis3d_path = Path(__file__).parent.parent / "Piscis3D"
+if str(piscis3d_path) not in sys.path:
+    sys.path.insert(0, str(piscis3d_path))
+
+try:
+    import jax
+    import jax.numpy as jnp
+    from piscis3d.data import generate_dataset_3d
+except ImportError as e:
+    print(f"Error importing Piscis3D modules: {e}")
+    print("Make sure Piscis3D is properly set up.")
+    sys.exit(1)
 
 # Import dataset loading functions
-# Note: Run this script from the tests directory or add tests to PYTHONPATH
 try:
     from dataset_loading import load_dataset
 except ImportError:
     import sys
     from pathlib import Path
-    # Add tests directory to path
     tests_dir = Path(__file__).parent
     if str(tests_dir) not in sys.path:
         sys.path.insert(0, str(tests_dir))
     from dataset_loading import load_dataset
 
 
-def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+def prepare_data_for_piscis_3d(dataset: dict, exclude_conditions: List[str] = None) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """
-    Prepare images and coordinates from dataset for Piscis.
+    Prepare 3D images and coordinates from dataset for Piscis3D.
     
     Parameters
     ----------
@@ -46,19 +50,17 @@ def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None)
         Dataset dictionary from load_dataset()
     exclude_conditions : List[str], optional
         List of condition names to exclude (default: ['0hr_Amputation', '0hr_Incision'])
-        If empty list or None, no conditions will be excluded.
     
     Returns
     -------
     Tuple[List[np.ndarray], List[np.ndarray]]
         (images, coords) tuple where:
-        - images: List of image arrays
-        - coords: List of spot coordinate arrays
+        - images: List of 3D image arrays with shape (z, y, x)
+        - coords: List of spot coordinate arrays with shape (n_spots, 3) where columns are (z, y, x)
     """
     if exclude_conditions is None:
         exclude_conditions = ['0hr_Amputation', '0hr_Incision']
     
-    # If exclude_conditions is an empty list, don't exclude anything
     if exclude_conditions == []:
         exclude_conditions = []
     
@@ -66,7 +68,7 @@ def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None)
     all_coords = []
     
     print(f"\n{'='*60}")
-    print("Preparing data for Piscis dataset generation")
+    print("Preparing 3D data for Piscis dataset generation")
     print(f"{'='*60}")
     print(f"Excluding conditions: {exclude_conditions}")
     print()
@@ -89,7 +91,6 @@ def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None)
                 continue
             
             # Validate and convert spots format
-            # Piscis expects 2D images and 2D coordinates (y, x)
             if isinstance(spot_data, np.ndarray):
                 # Check if spots array is empty
                 if spot_data.size == 0:
@@ -98,35 +99,26 @@ def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None)
                 
                 # Ensure spots is 2D array
                 if spot_data.ndim == 1:
-                    # If 1D, might be a single coordinate - skip for now or reshape
                     print(f"  Warning: Image {i+1} has 1D spots array, skipping")
                     continue
                 
-                # Convert 3D image to 2D using maximum intensity projection
-                # Images are in format (z, y, x), we need (y, x)
-                if img.ndim == 3:
-                    img_2d = np.max(img, axis=0)  # Max projection along z-axis: (y, x)
-                elif img.ndim == 2:
-                    img_2d = img  # Already 2D
-                else:
-                    print(f"  Warning: Image {i+1} has unsupported dimensions {img.ndim}, skipping")
+                # For 3D training, we keep images and coordinates in 3D format
+                # Images are already in format (z, y, x)
+                if img.ndim != 3:
+                    print(f"  Warning: Image {i+1} has {img.ndim} dimensions, expected 3 (z, y, x), skipping")
                     continue
                 
-                # Convert 3D coordinates (z, y, x) to 2D coordinates (y, x)
-                # Coordinates are in format (n_spots, 3) where columns are (z, y, x)
-                if spot_data.shape[1] == 3:
-                    # Extract only y and x coordinates (columns 1 and 2)
-                    # Keep coordinates as integers for indexing
-                    coords_2d = spot_data[:, [1, 2]].astype(np.float32)  # (n_spots, 2) as (y, x)
-                elif spot_data.shape[1] == 2:
-                    coords_2d = spot_data.astype(np.float32)  # Already 2D
-                else:
-                    print(f"  Warning: Image {i+1} has unsupported coordinate format {spot_data.shape}, skipping")
+                # Coordinates should be in format (n_spots, 3) where columns are (z, y, x)
+                if spot_data.shape[1] != 3:
+                    print(f"  Warning: Image {i+1} coordinates have shape {spot_data.shape}, expected (n_spots, 3), skipping")
                     continue
                 
-                all_images.append(img_2d)
-                all_coords.append(coords_2d)
-                print(f"  ✓ Added Image {i+1}: shape={img_2d.shape} (from {img.shape}), spots={coords_2d.shape} (from {spot_data.shape})")
+                # Ensure coordinates are float32 for consistency
+                coords_3d = spot_data.astype(np.float32)
+                
+                all_images.append(img)
+                all_coords.append(coords_3d)
+                print(f"  ✓ Added Image {i+1}: shape={img.shape}, spots={coords_3d.shape}")
             else:
                 print(f"  Warning: Image {i+1} has invalid spots format, skipping")
     
@@ -139,11 +131,11 @@ def prepare_data_for_piscis(dataset: dict, exclude_conditions: List[str] = None)
     return all_images, all_coords
 
 
-def generate_piscis_dataset(
-    base_dir: str = "/scratch/qgs8612/experiment",
-    output_path: str = "/scratch/qgs8612/piscis_training_dataset",
+def generate_piscis_dataset_3d(
+    base_dir: str = "/scratch/qgs8612/Experiment",
+    output_path: str = "/scratch/qgs8612/piscis_training_dataset_3d",
     wavelength: str = "565",
-    tile_size: Tuple[int, int] = (256, 256),
+    tile_size: Tuple[int, int, int] = (32, 256, 256),
     min_spots: int = 1,
     train_size: float = 0.7,
     test_size: float = 0.15,
@@ -152,7 +144,7 @@ def generate_piscis_dataset(
     verbose: bool = True
 ):
     """
-    Generate Piscis training dataset from experiment data.
+    Generate 3D Piscis training dataset from experiment data.
     
     Parameters
     ----------
@@ -162,8 +154,8 @@ def generate_piscis_dataset(
         Path where the dataset will be saved
     wavelength : str
         Wavelength folder to load from (default: "565")
-    tile_size : Tuple[int, int]
-        Tile size for splitting images (default: (256, 256))
+    tile_size : Tuple[int, int, int]
+        Tile size for splitting images (z, y, x) (default: (32, 256, 256))
     min_spots : int
         Minimum number of spots per tile (default: 1)
     train_size : float
@@ -178,18 +170,17 @@ def generate_piscis_dataset(
     verbose : bool
         Whether to print progress information
     """
-    try:
-        import piscis
-        from piscis import data as piscis_data
-    except ImportError:
-        raise ImportError("Piscis is not installed. Please install it: pip install git+https://github.com/zjniu/Piscis.git")
+    # Set JAX to use CPU if not already set (for dataset generation, CPU is sufficient)
+    if 'JAX_PLATFORMS' not in os.environ:
+        os.environ['JAX_PLATFORMS'] = 'cpu'
     
     # Load dataset
-    print("Loading dataset...")
+    if verbose:
+        print("Loading dataset...")
     dataset = load_dataset(base_dir=base_dir, wavelength=wavelength, verbose=verbose)
     
     # Prepare images and coordinates
-    images, coords = prepare_data_for_piscis(dataset, exclude_conditions=exclude_conditions)
+    images, coords = prepare_data_for_piscis_3d(dataset, exclude_conditions=exclude_conditions)
     
     if len(images) == 0:
         raise ValueError("No images found after filtering. Please check your data paths and exclusion criteria.")
@@ -199,24 +190,23 @@ def generate_piscis_dataset(
     
     # Create output directory
     output_dir = Path(output_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
     
-    print(f"\n{'='*60}")
-    print("Generating Piscis dataset")
-    print(f"{'='*60}")
-    print(f"Output path: {output_path}")
-    print(f"Total images: {len(images)}")
-    print(f"Tile size: {tile_size}")
-    print(f"Min spots per tile: {min_spots}")
-    print(f"Train size: {train_size}")
-    print(f"Test size: {test_size}")
-    print(f"Validation size: {1.0 - train_size - test_size:.2f}")
-    print(f"Random seed: {random_seed}")
-    print(f"{'='*60}\n")
+    if verbose:
+        print(f"\n{'='*60}")
+        print("Generating 3D Piscis dataset")
+        print(f"{'='*60}")
+        print(f"Output path: {output_path}")
+        print(f"Total images: {len(images)}")
+        print(f"Tile size (z, y, x): {tile_size}")
+        print(f"Min spots per tile: {min_spots}")
+        print(f"Train size: {train_size}")
+        print(f"Test size: {test_size}")
+        print(f"Validation size: {1.0 - train_size - test_size:.2f}")
+        print(f"Random seed: {random_seed}")
+        print(f"{'='*60}\n")
     
     # Generate JAX random key
-    # JAX_PLATFORMS should be set to 'cpu' by the bash script or at module import
-    # This prevents CUDA library initialization errors during dataset generation
     if verbose:
         try:
             devices = jax.devices()
@@ -227,10 +217,11 @@ def generate_piscis_dataset(
     
     key = jax.random.PRNGKey(random_seed)
     
-    # Generate dataset using Piscis
-    print("Calling piscis.data.generate_dataset()...")
+    # Generate dataset using Piscis3D
+    if verbose:
+        print("Calling piscis3d.data.generate_dataset_3d()...")
     try:
-        piscis_data.generate_dataset(
+        generate_dataset_3d(
             path=str(output_path),
             images=images,
             coords=coords,
@@ -240,30 +231,33 @@ def generate_piscis_dataset(
             train_size=train_size,
             test_size=test_size
         )
-        print(f"\n✓ Dataset successfully generated at: {output_path}")
+        if verbose:
+            print(f"\n✓ 3D Dataset successfully generated at: {output_path}")
     except Exception as e:
-        print(f"\n✗ Error generating dataset: {e}")
+        print(f"\n✗ Error generating 3D dataset: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 
 def main():
-    """Command-line interface for dataset generation."""
+    """Command-line interface for 3D dataset generation."""
     parser = argparse.ArgumentParser(
-        description="Generate Piscis training dataset from experiment data",
+        description="Generate 3D Piscis training dataset from experiment data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
     parser.add_argument(
         "--base_dir",
         type=str,
-        default="/scratch/qgs8612/experiment",
+        default="/scratch/qgs8612/Experiment",
         help="Base directory containing experiment data"
     )
     
     parser.add_argument(
         "--output_path",
         type=str,
-        default="/scratch/qgs8612/piscis_training_dataset",
+        default="/scratch/qgs8612/piscis_training_dataset_3d",
         help="Path where the dataset will be saved"
     )
     
@@ -277,10 +271,10 @@ def main():
     parser.add_argument(
         "--tile_size",
         type=int,
-        nargs=2,
-        default=[256, 256],
-        metavar=("HEIGHT", "WIDTH"),
-        help="Tile size for splitting images (height width)"
+        nargs=3,
+        default=[32, 256, 256],
+        metavar=("DEPTH", "HEIGHT", "WIDTH"),
+        help="Tile size for splitting images (z y x)"
     )
     
     parser.add_argument(
@@ -335,7 +329,7 @@ def main():
     tile_size = tuple(args.tile_size)
     
     # Generate dataset
-    generate_piscis_dataset(
+    generate_piscis_dataset_3d(
         base_dir=args.base_dir,
         output_path=args.output_path,
         wavelength=args.wavelength,
@@ -344,7 +338,7 @@ def main():
         train_size=args.train_size,
         test_size=args.test_size,
         random_seed=args.random_seed,
-        exclude_conditions=args.exclude,
+        exclude_conditions=args.exclude if args.exclude else [],
         verbose=not args.quiet
     )
 

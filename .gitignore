@@ -62,3 +62,9 @@ Thumbs.db
 *.log
 *.out
 
+# External cloned repositories (Piscis - original 2D version)
+Piscis/
+Piscis/**/*
+
+# Piscis3D is our modified version - we want to track this
+# Piscis3D/

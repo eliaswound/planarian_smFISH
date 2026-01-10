@@ -142,7 +142,7 @@ def generate_piscis_dataset_3d(
     random_seed: int = 42,
     exclude_conditions: List[str] = None,
     overlap_factor: float = 0.0,
-    batch_size: int = 100,
+    batch_size: int = 5,
     verbose: bool = True
 ):
     """
@@ -353,8 +353,8 @@ def main():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=100,
-        help="Number of tiles to accumulate in memory before writing to disk. Lower = less memory. Default: 100"
+        default=5,
+        help="Number of tiles to accumulate in memory before writing to disk. Lower = less memory. Default: 5 (very small for memory efficiency)"
     )
     
     parser.add_argument(

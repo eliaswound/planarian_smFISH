@@ -22,7 +22,7 @@ if str(piscis3d_path) not in sys.path:
 try:
     import jax
     import jax.numpy as jnp
-    from piscis3d.data import generate_dataset_3d, generate_dataset_3d_from_paths
+    from piscis3d.data import generate_dataset_3d_from_paths
 except ImportError as e:
     print(f"Error importing Piscis3D modules: {e}")
     print("Make sure Piscis3D is properly set up.")
@@ -241,9 +241,9 @@ def generate_piscis_dataset_3d(
     
     key = jax.random.PRNGKey(random_seed)
     
-    # Generate dataset using Piscis3D
+    # Generate dataset using Piscis3D (memory-optimized version)
     if verbose:
-        print("Calling piscis3d.data.generate_dataset_3d()...")
+        print("Calling piscis3d.data.generate_dataset_3d_from_paths()...")
     try:
         # Process images incrementally from disk with memory optimization
         generate_dataset_3d_from_paths(

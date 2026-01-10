@@ -221,13 +221,15 @@ def generate_piscis_dataset_3d(
         print("Generating 3D Piscis dataset")
         print(f"{'='*60}")
         print(f"Output path: {output_path}")
-        print(f"Total images: {len(images)}")
+        print(f"Total images: {len(image_paths)}")
         print(f"Tile size (z, y, x): {tile_size}")
         print(f"Min spots per tile: {min_spots}")
         print(f"Train size: {train_size}")
         print(f"Test size: {test_size}")
         print(f"Validation size: {1.0 - train_size - test_size:.2f}")
         print(f"Random seed: {random_seed}")
+        print(f"Overlap factor: {overlap_factor}")
+        print(f"Batch size: {batch_size}")
         print(f"{'='*60}\n")
     
     # Generate JAX random key

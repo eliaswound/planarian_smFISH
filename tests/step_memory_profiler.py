@@ -11,6 +11,7 @@ import gc
 import tracemalloc
 import traceback
 import functools
+from pathlib import Path
 from typing import Callable, Optional, Dict, List
 from contextlib import contextmanager
 import time
@@ -55,21 +56,42 @@ class StepMemoryProfiler:
         if self.verbose:
             print(message)
         if self.log_file:
-            with open(self.log_file, 'a') as f:
-                f.write(message + '\n')
+            try:
+                # Ensure directory exists
+                log_path = Path(self.log_file)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                # Append to file (creates if doesn't exist)
+                with open(self.log_file, 'a') as f:
+                    f.write(message + '\n')
+            except Exception as e:
+                # If logging fails, at least print to stdout
+                print(f"Warning: Could not write to log file {self.log_file}: {e}")
     
     def start(self):
         """Start memory profiling"""
-        self.start_memory = self._get_memory()
-        tracemalloc.start()
-        self.tracemalloc_active = True
-        
-        self._log("\n" + "="*70)
-        self._log("STEP-BY-STEP MEMORY PROFILING STARTED")
-        self._log("="*70)
-        self._log(f"Initial memory: RSS={format_size(self.start_memory['rss'])}, "
-                 f"Available={format_size(self.start_memory['system_available'])}")
-        self._log("="*70 + "\n")
+        try:
+            self.start_memory = self._get_memory()
+            tracemalloc.start()
+            self.tracemalloc_active = True
+            
+            self._log("\n" + "="*70)
+            self._log("STEP-BY-STEP MEMORY PROFILING STARTED")
+            self._log("="*70)
+            self._log(f"Initial memory: RSS={format_size(self.start_memory['rss'])}, "
+                     f"Available={format_size(self.start_memory['system_available'])}")
+            self._log("="*70 + "\n")
+        except Exception as e:
+            # If start fails, log the error
+            error_msg = f"ERROR: Profiler start failed: {e}"
+            print(error_msg)
+            if self.log_file:
+                try:
+                    Path(self.log_file).parent.mkdir(parents=True, exist_ok=True)
+                    with open(self.log_file, 'w') as f:
+                        f.write(error_msg + '\n')
+                except:
+                    pass
+            raise
     
     def stop(self):
         """Stop memory profiling"""

@@ -236,18 +236,31 @@ def generate_piscis_dataset_3d(
     
     # Initialize step-by-step memory profiler
     profiler = None
+    profiler_log = None
     try:
+        sys.path.insert(0, str(Path(__file__).parent))
         from step_memory_profiler import initialize_profiler
-        profiler_log = str(Path(output_path).parent / "memory_profiling.log")
+        # Save log in same directory as output (or current directory if output_path is just a name)
+        output_path_obj = Path(output_path)
+        if output_path_obj.is_absolute():
+            profiler_log = str(output_path_obj.parent / "memory_profiling.log")
+        else:
+            profiler_log = str(Path.cwd() / "memory_profiling.log")
         profiler = initialize_profiler(log_file=profiler_log, verbose=verbose)
         if verbose:
-            print(f"Step-by-step memory profiling enabled. Log: {profiler_log}")
-    except ImportError:
+            print(f"\n{'='*70}")
+            print(f"Step-by-step memory profiling enabled")
+            print(f"Log file: {profiler_log}")
+            print(f"{'='*70}\n")
+    except ImportError as e:
         if verbose:
-            print("Step-by-step memory profiler not available (step_memory_profiler.py not found)")
+            print(f"Warning: Step-by-step memory profiler not available: {e}")
+            print("(step_memory_profiler.py may not be in path)")
     except Exception as e:
         if verbose:
-            print(f"Could not initialize memory profiler: {e}")
+            print(f"Warning: Could not initialize memory profiler: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Memory check and troubleshooting
     if verbose:
@@ -387,14 +400,24 @@ def generate_piscis_dataset_3d(
             
             # Stop profiler if it was started
             if profiler:
-                profiler.stop()
-                if verbose:
-                    print(f"\nMemory profiling log saved to: {profiler.log_file}")
+                try:
+                    profiler.stop()
+                    if verbose and profiler_log:
+                        print(f"\n{'='*70}")
+                        print(f"Memory profiling log saved to: {profiler_log}")
+                        print(f"{'='*70}\n")
+                except Exception as e:
+                    if verbose:
+                        print(f"Warning: Could not stop profiler: {e}")
         except MemoryError as e:
             # Stop profiler to save final state
             if profiler:
                 try:
                     profiler.stop()
+                    if verbose and profiler_log:
+                        print(f"\n{'='*70}")
+                        print(f"Memory profiling log saved to: {profiler_log}")
+                        print(f"{'='*70}\n")
                 except:
                     pass
             print(f"\n✗ OUT OF MEMORY ERROR!")

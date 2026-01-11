@@ -14,9 +14,11 @@
 
 # Default parameters (can be overridden by command-line arguments)
 # Ultra-reduced tile size for memory efficiency: (8, 64, 64) instead of (32, 256, 256) - 64x smaller!
+# IMPORTANT: For 2GB images, MUST use small tile size to avoid OOM
 BASE_DIR=${1:-"/scratch/qgs8612/Experiment"}
 OUTPUT_PATH=${2:-"/scratch/qgs8612/piscis_training_dataset_3d"}
 WAVELENGTH=${3:-"565"}
+# Force small tile size - DO NOT increase these values for 2GB images!
 TILE_SIZE_Z=${4:-8}
 TILE_SIZE_Y=${5:-64}
 TILE_SIZE_X=${6:-64}

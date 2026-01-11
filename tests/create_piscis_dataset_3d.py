@@ -262,7 +262,7 @@ def generate_piscis_dataset_3d(
                 train_size=train_size,
                 test_size=test_size,
                 overlap_factor=overlap_factor,
-                max_tiles_per_image=500,  # Limit tiles per image to reduce memory
+                max_tiles_per_image=100,  # Limit tiles per image drastically to avoid OOM
                 verbose=verbose
             )
             if verbose:

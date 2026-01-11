@@ -234,6 +234,21 @@ def generate_piscis_dataset_3d(
         print(f"Batch size: {batch_size}")
         print(f"{'='*60}\n")
     
+    # Initialize step-by-step memory profiler
+    profiler = None
+    try:
+        from step_memory_profiler import initialize_profiler
+        profiler_log = str(Path(output_path).parent / "memory_profiling.log")
+        profiler = initialize_profiler(log_file=profiler_log, verbose=verbose)
+        if verbose:
+            print(f"Step-by-step memory profiling enabled. Log: {profiler_log}")
+    except ImportError:
+        if verbose:
+            print("Step-by-step memory profiler not available (step_memory_profiler.py not found)")
+    except Exception as e:
+        if verbose:
+            print(f"Could not initialize memory profiler: {e}")
+    
     # Memory check and troubleshooting
     if verbose:
         print("\n" + "="*60)
@@ -311,17 +326,25 @@ def generate_piscis_dataset_3d(
     use_streaming = True  # Use streaming by default for large datasets
     
     # Adjust max_tiles_per_image based on tile size to prevent OOM
-    # Larger tiles = fewer tiles per image
+    # For 2GB images, be VERY aggressive with limits
     tile_voxels = tile_size[0] * tile_size[1] * tile_size[2]
-    if tile_voxels > 8 * 64 * 64:  # If larger than (8, 64, 64)
-        # Reduce tiles per image proportionally
-        size_ratio = tile_voxels / (8 * 64 * 64)
-        max_tiles_per_image = max(10, int(100 / size_ratio))  # At least 10 tiles
+    safe_voxels = 8 * 64 * 64
+    
+    # Ultra-conservative: Even with correct tile size, limit to 50 tiles per image
+    # This prevents memory spikes when processing large images
+    if tile_voxels <= safe_voxels:
+        # Tile size is correct, but still limit aggressively for 2GB images
+        max_tiles_per_image = 50  # Reduced from 100 - very conservative
+        if verbose:
+            print(f"✓ Tile size {tile_size} is correct (safe size)")
+            print(f"  Using conservative limit: {max_tiles_per_image} tiles per image")
+    else:
+        # Larger tiles = even fewer tiles
+        size_ratio = tile_voxels / safe_voxels
+        max_tiles_per_image = max(10, int(50 / size_ratio))  # At least 10 tiles
         if verbose:
             print(f"⚠️  Large tile size detected: {tile_size}")
-            print(f"   Reducing max_tiles_per_image from 100 to {max_tiles_per_image} to prevent OOM")
-    else:
-        max_tiles_per_image = 100
+            print(f"   Reducing max_tiles_per_image to {max_tiles_per_image} to prevent OOM")
     
     if use_streaming:
         if verbose:
@@ -329,23 +352,51 @@ def generate_piscis_dataset_3d(
             print(f"  Max tiles per image: {max_tiles_per_image}")
         try:
             # Use streaming approach - saves batches without loading everything
-            generate_dataset_3d_streaming(
-                output_dir=str(output_path),
-                image_paths=image_paths,
-                coord_paths=coord_paths,
-                key=key,
-                tile_size=tile_size,
-                min_spots=min_spots,
-                train_size=train_size,
-                test_size=test_size,
-                overlap_factor=overlap_factor,
-                max_tiles_per_image=max_tiles_per_image,
-                verbose=verbose
-            )
+            if profiler:
+                with profiler.step("Generate Streaming Dataset", "generate_dataset_3d_streaming"):
+                    generate_dataset_3d_streaming(
+                        output_dir=str(output_path),
+                        image_paths=image_paths,
+                        coord_paths=coord_paths,
+                        key=key,
+                        tile_size=tile_size,
+                        min_spots=min_spots,
+                        train_size=train_size,
+                        test_size=test_size,
+                        overlap_factor=overlap_factor,
+                        max_tiles_per_image=max_tiles_per_image,
+                        verbose=verbose
+                    )
+            else:
+                generate_dataset_3d_streaming(
+                    output_dir=str(output_path),
+                    image_paths=image_paths,
+                    coord_paths=coord_paths,
+                    key=key,
+                    tile_size=tile_size,
+                    min_spots=min_spots,
+                    train_size=train_size,
+                    test_size=test_size,
+                    overlap_factor=overlap_factor,
+                    max_tiles_per_image=max_tiles_per_image,
+                    verbose=verbose
+                )
             if verbose:
                 print(f"\n✓ 3D Streaming Dataset successfully generated at: {output_path}")
                 print(f"  This format can be loaded incrementally during training")
+            
+            # Stop profiler if it was started
+            if profiler:
+                profiler.stop()
+                if verbose:
+                    print(f"\nMemory profiling log saved to: {profiler.log_file}")
         except MemoryError as e:
+            # Stop profiler to save final state
+            if profiler:
+                try:
+                    profiler.stop()
+                except:
+                    pass
             print(f"\n✗ OUT OF MEMORY ERROR!")
             print(f"  Error: {e}")
             print(f"\nTroubleshooting:")

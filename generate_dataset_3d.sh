@@ -45,8 +45,8 @@ echo "Using Python: $PYTHON"
 echo "Python version: $($PYTHON --version)"
 echo "JAX_PLATFORMS: $JAX_PLATFORMS (forced to CPU for dataset generation)"
 
-# Add Piscis3D to PYTHONPATH
-export PYTHONPATH="$HOME/planarian_smFISH/Piscis3D:$PYTHONPATH"
+# Add Piscis3D and tests to PYTHONPATH (for memory profiler)
+export PYTHONPATH="$HOME/planarian_smFISH/Piscis3D:$HOME/planarian_smFISH/tests:$PYTHONPATH"
 echo "PYTHONPATH: $PYTHONPATH"
 
 # Check if JAX is available

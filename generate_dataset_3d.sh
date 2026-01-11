@@ -104,6 +104,40 @@ echo "Wavelength: $WAVELENGTH"
 echo "Tile size (z, y, x): ($TILE_SIZE_Z, $TILE_SIZE_Y, $TILE_SIZE_X)"
 echo "Min spots: $MIN_SPOTS"
 
+# Add memory monitor to path
+export PYTHONPATH="$HOME/planarian_smFISH/tests:$PYTHONPATH"
+
+# Run memory check first
+echo "============================================================"
+echo "Pre-flight Memory Check"
+echo "============================================================"
+$PYTHON -c "
+import sys
+sys.path.insert(0, '$HOME/planarian_smFISH/tests')
+try:
+    from memory_monitor import check_memory_before_processing, print_memory_status
+    print_memory_status('Before dataset generation')
+    can_proceed, msg = check_memory_before_processing(
+        tile_size=($TILE_SIZE_Z, $TILE_SIZE_Y, $TILE_SIZE_X),
+        n_images=12,
+        estimated_tiles_per_image=100
+    )
+    print(msg)
+    if not can_proceed:
+        print('ERROR: Insufficient memory! Reduce tile size or tiles per image.')
+        sys.exit(1)
+except ImportError:
+    print('Memory monitor not available - skipping check')
+except Exception as e:
+    print(f'Memory check failed: {e}')
+    print('Continuing anyway...')
+"
+
+if [ $? -ne 0 ]; then
+    echo "Memory check failed - aborting"
+    exit 1
+fi
+
 # Run the 3D dataset generation script
 echo "============================================================"
 echo "Starting 3D Piscis Dataset Generation"

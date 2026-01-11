@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 import numpy as np
+import gc
 
 # Add Piscis3D to path
 piscis3d_path = Path(__file__).parent.parent / "Piscis3D"
@@ -233,6 +234,65 @@ def generate_piscis_dataset_3d(
         print(f"Batch size: {batch_size}")
         print(f"{'='*60}\n")
     
+    # Memory check and troubleshooting
+    if verbose:
+        print("\n" + "="*60)
+        print("MEMORY CHECK AND TROUBLESHOOTING")
+        print("="*60)
+        
+        # Import memory monitor
+        try:
+            from memory_monitor import (
+                print_memory_status, 
+                check_memory_before_processing,
+                diagnose_memory_issue,
+                estimate_tile_memory
+            )
+            
+            # Print initial memory status
+            print_memory_status("Initial")
+            
+            # Estimate memory needs
+            estimated_tiles_per_image = 100  # Conservative estimate
+            can_proceed, mem_message = check_memory_before_processing(
+                tile_size=tile_size,
+                n_images=len(image_paths),
+                estimated_tiles_per_image=estimated_tiles_per_image,
+                safety_margin=0.3  # 30% safety margin
+            )
+            
+            print(mem_message)
+            
+            if not can_proceed:
+                print("\n⚠️  WARNING: Insufficient memory detected!")
+                print("Recommendations:")
+                print(f"  1. Reduce tile size from {tile_size} to (8, 64, 64) or smaller")
+                print(f"  2. Reduce max_tiles_per_image (currently 100)")
+                print(f"  3. Process fewer images at a time")
+                print("\nAttempting to continue anyway...")
+                print("(This may cause OOM - monitor memory usage carefully)")
+            
+            # Show tile size impact
+            tile_est = estimate_tile_memory(tile_size, len(image_paths) * estimated_tiles_per_image)
+            print(f"\nTile Memory Analysis:")
+            print(f"  Tile size: {tile_size}")
+            print(f"  Bytes per tile: {tile_est['bytes_per_tile']:,} ({tile_est['bytes_per_tile'] / (1024*1024):.2f} MB)")
+            print(f"  Estimated total tiles: {tile_est['n_tiles']:,}")
+            print(f"  Estimated total tile data: {tile_est['total_bytes'] / (1024**3):.2f} GB")
+            
+            if tile_size[0] * tile_size[1] * tile_size[2] > 8 * 64 * 64:
+                print(f"\n⚠️  WARNING: Tile size {tile_size} is LARGE!")
+                print(f"  Recommended: (8, 64, 64) = {8*64*64:,} voxels")
+                print(f"  Your size: {tile_size[0]*tile_size[1]*tile_size[2]:,} voxels")
+                print(f"  Ratio: {tile_size[0]*tile_size[1]*tile_size[2] / (8*64*64):.1f}x larger")
+            
+        except ImportError:
+            print("  (Memory monitor not available - skipping detailed checks)")
+        except Exception as e:
+            print(f"  (Memory check failed: {e})")
+        
+        print("="*60 + "\n")
+    
     # Generate JAX random key
     if verbose:
         try:
@@ -244,12 +304,29 @@ def generate_piscis_dataset_3d(
     
     key = jax.random.PRNGKey(random_seed)
     
+    # Force garbage collection before starting
+    gc.collect()
+    
     # Choose dataset generation method based on expected size
     use_streaming = True  # Use streaming by default for large datasets
+    
+    # Adjust max_tiles_per_image based on tile size to prevent OOM
+    # Larger tiles = fewer tiles per image
+    tile_voxels = tile_size[0] * tile_size[1] * tile_size[2]
+    if tile_voxels > 8 * 64 * 64:  # If larger than (8, 64, 64)
+        # Reduce tiles per image proportionally
+        size_ratio = tile_voxels / (8 * 64 * 64)
+        max_tiles_per_image = max(10, int(100 / size_ratio))  # At least 10 tiles
+        if verbose:
+            print(f"⚠️  Large tile size detected: {tile_size}")
+            print(f"   Reducing max_tiles_per_image from 100 to {max_tiles_per_image} to prevent OOM")
+    else:
+        max_tiles_per_image = 100
     
     if use_streaming:
         if verbose:
             print("Using STREAMING dataset generation (memory efficient)...")
+            print(f"  Max tiles per image: {max_tiles_per_image}")
         try:
             # Use streaming approach - saves batches without loading everything
             generate_dataset_3d_streaming(
@@ -262,14 +339,47 @@ def generate_piscis_dataset_3d(
                 train_size=train_size,
                 test_size=test_size,
                 overlap_factor=overlap_factor,
-                max_tiles_per_image=100,  # Limit tiles per image drastically to avoid OOM
+                max_tiles_per_image=max_tiles_per_image,
                 verbose=verbose
             )
             if verbose:
                 print(f"\n✓ 3D Streaming Dataset successfully generated at: {output_path}")
                 print(f"  This format can be loaded incrementally during training")
+        except MemoryError as e:
+            print(f"\n✗ OUT OF MEMORY ERROR!")
+            print(f"  Error: {e}")
+            print(f"\nTroubleshooting:")
+            print(f"  1. Tile size used: {tile_size}")
+            print(f"  2. Max tiles per image: {max_tiles_per_image}")
+            print(f"  3. Total images: {len(image_paths)}")
+            print(f"\nSolutions:")
+            print(f"  - Reduce tile size to (8, 64, 64) or smaller")
+            print(f"  - Reduce max_tiles_per_image further")
+            print(f"  - Process fewer images at a time")
+            print(f"  - Check available memory: free -h")
+            
+            # Try to diagnose
+            try:
+                from memory_monitor import diagnose_memory_issue
+                diagnose_memory_issue()
+            except:
+                pass
+            
+            import traceback
+            traceback.print_exc()
+            raise
         except Exception as e:
             print(f"\n✗ Error generating streaming 3D dataset: {e}")
+            print(f"\nTroubleshooting info:")
+            print(f"  Tile size: {tile_size}")
+            print(f"  Max tiles per image: {max_tiles_per_image}")
+            print(f"  Total images: {len(image_paths)}")
+            
+            # Check if it might be memory-related
+            if "memory" in str(e).lower() or "oom" in str(e).lower():
+                print(f"\n⚠️  This looks like a memory issue!")
+                print(f"  Try reducing tile size to (8, 64, 64)")
+            
             import traceback
             traceback.print_exc()
             raise
@@ -401,6 +511,27 @@ def main():
     
     # Convert tile_size to tuple
     tile_size = tuple(args.tile_size)
+    
+    # Validate tile size - warn if too large
+    tile_voxels = tile_size[0] * tile_size[1] * tile_size[2]
+    safe_voxels = 8 * 64 * 64  # (8, 64, 64)
+    
+    if tile_voxels > safe_voxels:
+        print(f"\n{'='*60}")
+        print("⚠️  WARNING: TILE SIZE IS TOO LARGE!")
+        print(f"{'='*60}")
+        print(f"  Current tile size: {tile_size} = {tile_voxels:,} voxels")
+        print(f"  Recommended: (8, 64, 64) = {safe_voxels:,} voxels")
+        print(f"  Your tiles are {tile_voxels / safe_voxels:.1f}x larger!")
+        print(f"  This will likely cause OUT OF MEMORY errors!")
+        print(f"\n  To fix, run with:")
+        print(f"    --tile_size 8 64 64")
+        print(f"{'='*60}\n")
+        
+        response = input("Continue anyway? (yes/no): ").strip().lower()
+        if response not in ['yes', 'y']:
+            print("Aborting. Please use smaller tile size.")
+            sys.exit(1)
     
     # Generate dataset with memory optimization parameters
     generate_piscis_dataset_3d(

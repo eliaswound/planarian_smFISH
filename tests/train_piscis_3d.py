@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 import json
 import numpy as np
+
+# Force JAX to use CPU (important on login nodes or CPU-only environments)
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
+
 import jax
 import jax.numpy as jnp
 from jax import random
@@ -22,11 +26,14 @@ try:
     from piscis3d.data_streaming import load_dataset_streaming, dataset_generator
     from piscis3d.models.spots_3d import SpotsModel3D
     from piscis3d.transforms import voronoi_transform_3d, batch_adjust_3d
+    from piscis3d.training import train_model
     HAS_PISCIS3D = True
 except ImportError as e:
     HAS_PISCIS3D = False
     print(f"ERROR: Piscis3D modules not found: {e}")
     print("Make sure Piscis3D directory exists and contains the required modules.")
+    import traceback
+    traceback.print_exc()
 
 
 def create_training_directory(base_dir: str = "/scratch/qgs8612/piscis3d_dataset"):
@@ -126,12 +133,88 @@ def main():
     )
     
     parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=1e-4,
+        help="Weight decay regularization strength"
+    )
+    
+    parser.add_argument(
+        "--dropout_rate",
+        type=float,
+        default=0.2,
+        help="Dropout rate at skip connections"
+    )
+    
+    parser.add_argument(
+        "--warmup_fraction",
+        type=float,
+        default=0.05,
+        help="Fraction of epochs for learning rate warmup"
+    )
+    
+    parser.add_argument(
+        "--decay_fraction",
+        type=float,
+        default=0.5,
+        help="Fraction of epochs for learning rate decay"
+    )
+    
+    parser.add_argument(
+        "--decay_transitions",
+        type=int,
+        default=10,
+        help="Number of learning rate decay transitions"
+    )
+    
+    parser.add_argument(
+        "--decay_factor",
+        type=float,
+        default=0.5,
+        help="Multiplicative factor for each decay transition"
+    )
+    
+    parser.add_argument(
+        "--dilation_iterations",
+        type=int,
+        default=1,
+        help="Number of iterations to dilate ground truth labels"
+    )
+    
+    parser.add_argument(
+        "--max_distance",
+        type=float,
+        default=3.0,
+        help="Maximum distance for matching predicted and ground truth vectors"
+    )
+    
+    parser.add_argument(
+        "--adjustment",
+        type=str,
+        choices=["normalize", "standardize", "none"],
+        default="standardize",
+        help="Image adjustment type (none = no adjustment)"
+    )
+    
+    parser.add_argument(
+        "--no_checkpoints",
+        action="store_true",
+        help="Disable saving checkpoints during training"
+    )
+    
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress verbose output"
     )
     
     args = parser.parse_args()
+    
+    # Convert adjustment
+    if args.adjustment == "none":
+        adjustment = None
+    else:
+        adjustment = args.adjustment
     
     if not HAS_PISCIS3D:
         print("ERROR: Piscis3D modules not available.")
@@ -227,21 +310,50 @@ def main():
         traceback.print_exc()
         sys.exit(1)
     
-    print(f"\n{'='*60}")
-    print("NOTE: Full training loop not yet implemented.")
-    print("Dataset loading and streaming generator work correctly.")
-    print("To implement training, you need to:")
-    print("  1. Create a 3D training loop similar to piscis.training.train_model")
-    print("  2. Implement loss functions for 3D")
-    print("  3. Set up optimizer and training state")
-    print("  4. Implement checkpoint saving")
-    print(f"{'='*60}\n")
+    # Start training
+    if not args.quiet:
+        print(f"\n{'='*60}")
+        print("Starting 3D Piscis Training")
+        print(f"{'='*60}\n")
     
-    print("For now, you can use the dataset with:")
-    print(f"  from piscis3d.data_streaming import dataset_generator")
-    print(f"  generator = dataset_generator('{args.dataset_path}', split='train')")
-    print(f"  for images, coords in generator:")
-    print(f"      # Process batch here")
+    try:
+        train_model(
+            model_name=args.model_name,
+            dataset_path=str(args.dataset_path),
+            output_dir=str(args.output_dir),
+            tile_size=tile_size,
+            random_seed=args.random_seed,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            dropout_rate=args.dropout_rate,
+            epochs=args.epochs,
+            warmup_fraction=args.warmup_fraction,
+            decay_fraction=args.decay_fraction,
+            decay_transitions=args.decay_transitions,
+            decay_factor=args.decay_factor,
+            dilation_iterations=args.dilation_iterations,
+            max_distance=args.max_distance,
+            loss_weights={'l2': 0.25, 'smoothf1': 1.0},
+            adjustment=adjustment,
+            save_checkpoints=not args.no_checkpoints,
+            verbose=not args.quiet
+        )
+        
+        if not args.quiet:
+            print(f"\n{'='*60}")
+            print(f"✓ Training completed successfully!")
+            print(f"Model saved as: {args.model_name}")
+            print(f"Output directory: {args.output_dir}")
+            print(f"{'='*60}\n")
+    except Exception as e:
+        print(f"\n{'='*60}")
+        print(f"✗ Training failed with error:")
+        print(f"{str(e)}")
+        print(f"{'='*60}\n")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

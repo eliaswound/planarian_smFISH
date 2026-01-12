@@ -12,8 +12,11 @@ from typing import Dict, Optional, Tuple
 import json
 import numpy as np
 
-# Force JAX to use CPU (important on login nodes or CPU-only environments)
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
+# Force JAX to use CPU (important when CUDA libraries aren't properly initialized)
+# Set this BEFORE importing JAX to prevent CUDA initialization attempts
+# Always force CPU mode to avoid CUDA initialization errors
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import jax
 import jax.numpy as jnp

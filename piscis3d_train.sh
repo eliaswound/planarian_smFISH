@@ -19,7 +19,14 @@ BATCH_SIZE=${5:-2}
 LEARNING_RATE=${6:-0.001}
 
 module load python-miniconda3
-# Load JAX with GPU support via jax-fem module FIRST
+
+# Force CPU mode BEFORE loading jax-fem to prevent CUDA initialization
+# This prevents JAX from crashing when CUDA libraries aren't properly set up
+export JAX_PLATFORMS=cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
+# Load JAX with GPU support via jax-fem module
+# Note: We're forcing CPU mode above, but the module still provides JAX
 module load jax-fem/0.0.8-gpu
 
 # Initialize conda for bash shell and activate the environment

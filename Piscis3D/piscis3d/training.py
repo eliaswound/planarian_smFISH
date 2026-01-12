@@ -118,7 +118,7 @@ def masked_l2_loss_3d(
     return loss
 
 
-@partial(jit, static_argnums=(4, 5, 6))
+@partial(jit, static_argnums=(4, 5, 7))
 def loss_fn(
     params: Dict,
     state: TrainState,
@@ -165,7 +165,7 @@ def loss_fn(
     return loss, (metrics, mutated_vars)
 
 
-@partial(jit, static_argnums=(3, 4, 5))
+@partial(jit, static_argnums=(3, 4))
 def train_step(
     state: TrainState,
     batch: Dict[str, jax.Array],

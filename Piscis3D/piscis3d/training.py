@@ -28,7 +28,6 @@ class TrainState(train_state.TrainState):
     epoch: jax.Array
 
 
-@partial(jit, static_argnums=(1, 2, 3))
 def create_train_state(
     key: jax.Array,
     input_size: Tuple[int, int, int],
@@ -37,7 +36,11 @@ def create_train_state(
     tx: optax.GradientTransformation,
     variables: Optional[Dict] = None
 ) -> TrainState:
-    """Create a new TrainState object for 3D model."""
+    """Create a new TrainState object for 3D model.
+    
+    Note: This function cannot be JIT compiled because Flax model initialization
+    involves creating model instances and calling init(), which returns mutable structures.
+    """
     key, subkey = random.split(key, 2)
     
     # Initialize the model

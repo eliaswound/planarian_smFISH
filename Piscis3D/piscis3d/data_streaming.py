@@ -49,15 +49,39 @@ def generate_dataset_3d_streaming(
     - train/, test/, valid/ directories with batch files
     - Each batch file contains up to 500 tiles (reduced for memory efficiency with large images)
     """
+    print("DEBUG: generate_dataset_3d_streaming() STARTED", flush=True)
+    sys.stdout.flush()
+    
+    print(f"DEBUG: About to create output directory: {output_dir}", flush=True)
+    sys.stdout.flush()
+    
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("DEBUG: Output directory created", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to create split directories", flush=True)
+    sys.stdout.flush()
     
     # Create split directories
     for split in ['train', 'test', 'valid']:
         (output_dir / split).mkdir(exist_ok=True)
     
+    print("DEBUG: Split directories created", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to get profiler", flush=True)
+    sys.stdout.flush()
+    
     # Get profiler if available
     profiler = get_profiler() if HAS_PROFILER else None
+    
+    print(f"DEBUG: Profiler obtained: {profiler is not None}", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to start Step 1: Count valid tiles", flush=True)
+    sys.stdout.flush()
     
     # Step 1: Count valid tiles (without loading images)
     step_name = "Step 1: Count valid tiles"
@@ -69,24 +93,47 @@ def generate_dataset_3d_streaming(
     
     try:
         if verbose:
-            print(f"\nStep 1: Scanning images to count valid tiles...")
+            print(f"\nStep 1: Scanning images to count valid tiles...", flush=True)
         tile_metadata = []
         
+        print(f"DEBUG: About to iterate over {len(image_paths)} images", flush=True)
+        sys.stdout.flush()
+        
         for img_idx, (img_path, coord_path) in enumerate(zip(image_paths, coord_paths)):
+            print(f"DEBUG: Processing image {img_idx+1}/{len(image_paths)}: {Path(img_path).name}", flush=True)
+            sys.stdout.flush()
             if verbose and img_idx % 2 == 0:
                 print(f"  Scanning image {img_idx+1}/{len(image_paths)}...", end='\r')
             
             try:
+                print(f"DEBUG: Image {img_idx+1}: About to open TiffFile", flush=True)
+                sys.stdout.flush()
+                
                 # Get image shape without loading
                 with TiffFile(img_path) as tif:
                     series = tif.series[0]
                     if series.ndim != 3:
+                        print(f"DEBUG: Image {img_idx+1}: Not 3D, skipping", flush=True)
                         continue
                     z_max, y_max, x_max = series.shape
+                    print(f"DEBUG: Image {img_idx+1}: Shape = ({z_max}, {y_max}, {x_max})", flush=True)
+                    sys.stdout.flush()
+                
+                print(f"DEBUG: Image {img_idx+1}: About to load coordinates", flush=True)
+                sys.stdout.flush()
                 
                 # Load only coordinates
                 coords = np.load(coord_path).astype(np.float32)
+                print(f"DEBUG: Image {img_idx+1}: Loaded {len(coords)} coordinates", flush=True)
+                sys.stdout.flush()
+                
+                print(f"DEBUG: Image {img_idx+1}: About to remove duplicates", flush=True)
+                sys.stdout.flush()
+                
                 coords = remove_duplicate_coords_3d(coords)
+                
+                print(f"DEBUG: Image {img_idx+1}: After deduplication: {len(coords)} coordinates", flush=True)
+                sys.stdout.flush()
                 
                 if coords.ndim != 2 or coords.shape[1] != 3:
                     continue

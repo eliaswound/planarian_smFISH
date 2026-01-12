@@ -252,8 +252,13 @@ def train_epoch(
     if verbose:
         print(f'Epoch {int(state.epoch) + 1}:')
     
-    # Update learning rate
-    state.opt_state.hyperparams['learning_rate'] = jnp.array(epoch_learning_rate, dtype=jnp.float32)
+    # Update learning rate (only works if optimizer was created with inject_hyperparams)
+    # Check if hyperparams exist before trying to update
+    if hasattr(state.opt_state, 'hyperparams') and 'learning_rate' in state.opt_state.hyperparams:
+        state.opt_state.hyperparams['learning_rate'] = jnp.array(epoch_learning_rate, dtype=jnp.float32)
+    # If hyperparams don't exist, we'll just use the fixed learning rate
+    # (this means we need to recreate the optimizer with the new LR, but that's complex)
+    # For now, we'll assume inject_hyperparams is used
     
     # Get random key for this epoch
     key = random.fold_in(state.key, state.epoch)
@@ -441,8 +446,10 @@ def train_model(
     # Create random key
     key = random.PRNGKey(random_seed)
     
-    # Create optimizer
-    tx = optax.adamw(learning_rate=learning_rate, weight_decay=weight_decay)
+    # Create optimizer with inject_hyperparams to allow learning rate updates
+    # This allows us to update the learning rate during training
+    base_optimizer = partial(optax.adamw, weight_decay=weight_decay)
+    tx = optax.inject_hyperparams(base_optimizer)(learning_rate=learning_rate)
     
     # Create training state
     if verbose:

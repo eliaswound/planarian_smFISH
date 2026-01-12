@@ -147,6 +147,9 @@ def generate_piscis_dataset_3d(
     batch_size: int = 1,
     verbose: bool = True
 ):
+    # Debug: Print immediately to verify function was called
+    print("DEBUG: generate_piscis_dataset_3d() function started", flush=True)
+    sys.stdout.flush()
     """
     Generate 3D Piscis training dataset from experiment data.
     
@@ -486,6 +489,10 @@ def generate_piscis_dataset_3d(
 
 def main():
     """Command-line interface for 3D dataset generation."""
+    # Debug: Print immediately to verify script is running
+    print("DEBUG: main() function started", flush=True)
+    sys.stdout.flush()
+    
     parser = argparse.ArgumentParser(
         description="Generate 3D Piscis training dataset from experiment data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -601,11 +608,9 @@ def main():
         print(f"\n  To fix, run with:")
         print(f"    --tile_size 8 64 64")
         print(f"{'='*60}\n")
-        
-        response = input("Continue anyway? (yes/no): ").strip().lower()
-        if response not in ['yes', 'y']:
-            print("Aborting. Please use smaller tile size.")
-            sys.exit(1)
+        print("ERROR: Tile size is too large. This will cause OOM errors.")
+        print("Aborting. Please use smaller tile size (--tile_size 8 64 64).")
+        sys.exit(1)
     
     # Generate dataset with memory optimization parameters
     generate_piscis_dataset_3d(
@@ -625,4 +630,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Debug: Print immediately to verify script entry point
+    print("DEBUG: Script entry point reached", flush=True)
+    sys.stdout.flush()
+    
+    try:
+        main()
+    except Exception as e:
+        print(f"DEBUG: Exception in main(): {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
+        raise

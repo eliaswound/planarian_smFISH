@@ -21,13 +21,27 @@ if str(piscis3d_path) not in sys.path:
     sys.path.insert(0, str(piscis3d_path))
 
 try:
+    print("DEBUG: About to import jax", flush=True)
+    sys.stdout.flush()
     import jax
+    print("DEBUG: jax imported successfully", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to import jax.numpy", flush=True)
+    sys.stdout.flush()
     import jax.numpy as jnp
+    print("DEBUG: jax.numpy imported successfully", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to import piscis3d modules", flush=True)
+    sys.stdout.flush()
     from piscis3d.data import generate_dataset_3d_from_paths
     from piscis3d.data_streaming import generate_dataset_3d_streaming
+    print("DEBUG: piscis3d modules imported successfully", flush=True)
+    sys.stdout.flush()
 except ImportError as e:
-    print(f"Error importing Piscis3D modules: {e}")
-    print("Make sure Piscis3D is properly set up.")
+    print(f"Error importing Piscis3D modules: {e}", flush=True)
+    print("Make sure Piscis3D is properly set up.", flush=True)
     sys.exit(1)
 
 # Import dataset loading functions
@@ -177,14 +191,33 @@ def generate_piscis_dataset_3d(
     verbose : bool
         Whether to print progress information
     """
+    print("DEBUG: About to set JAX_PLATFORMS", flush=True)
+    sys.stdout.flush()
+    
     # Set JAX to use CPU if not already set (for dataset generation, CPU is sufficient)
     if 'JAX_PLATFORMS' not in os.environ:
         os.environ['JAX_PLATFORMS'] = 'cpu'
     
+    print("DEBUG: JAX_PLATFORMS set, about to load dataset paths", flush=True)
+    sys.stdout.flush()
+    
     # Load only file paths - don't load images into memory
     if verbose:
-        print("Loading dataset paths only (not loading images to save memory)...")
-    dataset = load_dataset_paths_only(base_dir=base_dir, wavelength=wavelength, verbose=verbose)
+        print("Loading dataset paths only (not loading images to save memory)...", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to call load_dataset_paths_only()", flush=True)
+    sys.stdout.flush()
+    
+    try:
+        dataset = load_dataset_paths_only(base_dir=base_dir, wavelength=wavelength, verbose=verbose)
+        print("DEBUG: load_dataset_paths_only() completed successfully", flush=True)
+        sys.stdout.flush()
+    except Exception as e:
+        print(f"DEBUG: ERROR in load_dataset_paths_only(): {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
+        raise
     
     # Collect image/coordinate paths from non-excluded conditions
     image_paths = []

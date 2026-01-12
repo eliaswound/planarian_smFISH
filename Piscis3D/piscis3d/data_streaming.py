@@ -334,10 +334,21 @@ def generate_dataset_3d_streaming(
                         continue
                 
                 # Save batch
+                # Convert to object arrays to handle variable-length arrays
                 batch_file = split_dir / f'batch_{batch_idx:04d}.npz'
+                
+                # Convert lists to object arrays to handle variable shapes
+                images_array = np.empty(len(batch_image_list), dtype=object)
+                coords_array = np.empty(len(batch_coords_list), dtype=object)
+                
+                for i, img in enumerate(batch_image_list):
+                    images_array[i] = img
+                for i, coord in enumerate(batch_coords_list):
+                    coords_array[i] = coord
+                
                 np.savez_compressed(batch_file, 
-                                  images=batch_image_list, 
-                                  coords=batch_coords_list)
+                                  images=images_array, 
+                                  coords=coords_array)
                 
                 batch_files.append(str(batch_file.relative_to(output_dir)))
                 batch_counts.append(len(batch_image_list))

@@ -316,6 +316,13 @@ def load_dataset_paths_only(base_dir: str = "/scratch/qgs8612/Experiment",
                 print(f"\n  Summary for {condition}:")
                 print(f"    Image/spot pairs: {len(condition_image_paths)}")
     
+    # Force garbage collection before returning
+    import gc
+    gc.collect()
+    
+    if verbose:
+        print(f"\nDEBUG: load_dataset_paths_only returning dataset with {len(dataset)} conditions", flush=True)
+    
     return dataset
 
 

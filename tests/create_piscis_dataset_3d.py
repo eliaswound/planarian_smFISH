@@ -209,9 +209,14 @@ def generate_piscis_dataset_3d(
     print("DEBUG: About to call load_dataset_paths_only()", flush=True)
     sys.stdout.flush()
     
+    print("DEBUG: About to call load_dataset_paths_only() - BEFORE call", flush=True)
+    sys.stdout.flush()
+    
     try:
         dataset = load_dataset_paths_only(base_dir=base_dir, wavelength=wavelength, verbose=verbose)
-        print("DEBUG: load_dataset_paths_only() completed successfully", flush=True)
+        print("DEBUG: load_dataset_paths_only() returned - AFTER assignment", flush=True)
+        sys.stdout.flush()
+        print(f"DEBUG: Dataset type: {type(dataset)}, size: {len(dataset) if hasattr(dataset, '__len__') else 'N/A'}", flush=True)
         sys.stdout.flush()
     except Exception as e:
         print(f"DEBUG: ERROR in load_dataset_paths_only(): {e}", file=sys.stderr, flush=True)
@@ -219,18 +224,39 @@ def generate_piscis_dataset_3d(
         traceback.print_exc()
         raise
     
+    print("DEBUG: About to force garbage collection", flush=True)
+    sys.stdout.flush()
+    
+    # Force garbage collection after loading paths
+    import gc
+    gc.collect()
+    print("DEBUG: Garbage collection completed", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to collect image/coordinate paths", flush=True)
+    sys.stdout.flush()
+    
     # Collect image/coordinate paths from non-excluded conditions
     image_paths = []
     coord_paths = []
+    
+    print(f"DEBUG: Dataset has {len(dataset)} conditions", flush=True)
+    sys.stdout.flush()
+    
     for condition, data in dataset.items():
+        print(f"DEBUG: Processing condition: {condition}", flush=True)
+        sys.stdout.flush()
         if condition in (exclude_conditions or []):
             if verbose:
-                print(f"Skipping {condition} (excluded)")
+                print(f"Skipping {condition} (excluded)", flush=True)
             continue
         
         # Get paths from dataset
         img_paths = data.get('image_paths', [])
         spot_paths = data.get('spots_paths', [])
+        
+        print(f"DEBUG: Condition {condition} has {len(img_paths)} image paths", flush=True)
+        sys.stdout.flush()
         
         # Both lists should be the same length
         for img_path, spot_path in zip(img_paths, spot_paths):
@@ -238,7 +264,15 @@ def generate_piscis_dataset_3d(
             coord_paths.append(spot_path)
         
         if verbose:
-            print(f"  {condition}: Added {len(img_paths)} image/spot pairs")
+            print(f"  {condition}: Added {len(img_paths)} image/spot pairs", flush=True)
+    
+    print(f"DEBUG: Finished collecting paths. Total: {len(image_paths)} images", flush=True)
+    sys.stdout.flush()
+    
+    # Force garbage collection after collecting paths
+    gc.collect()
+    print("DEBUG: Garbage collection after path collection", flush=True)
+    sys.stdout.flush()
     
     if len(image_paths) == 0:
         raise ValueError("No images found after filtering. Please check your data paths and exclusion criteria.")
@@ -246,13 +280,22 @@ def generate_piscis_dataset_3d(
     if len(image_paths) != len(coord_paths):
         raise ValueError(f"Mismatch: {len(image_paths)} images but {len(coord_paths)} coordinate files")
     
+    print("DEBUG: Path validation passed", flush=True)
+    sys.stdout.flush()
+    
     if verbose:
         print(f"Found {len(image_paths)} images to process")
         print("Processing images incrementally from disk to reduce memory usage...")
     
+    print("DEBUG: About to create output directory", flush=True)
+    sys.stdout.flush()
+    
     # Create output directory
     output_dir = Path(output_path)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
+    
+    print("DEBUG: Output directory created", flush=True)
+    sys.stdout.flush()
     
     if verbose:
         print(f"\n{'='*60}")
@@ -358,6 +401,9 @@ def generate_piscis_dataset_3d(
         print("="*60 + "\n")
     
     # Generate JAX random key
+    print("DEBUG: About to check JAX devices", flush=True)
+    sys.stdout.flush()
+    
     if verbose:
         try:
             devices = jax.devices()
@@ -366,13 +412,28 @@ def generate_piscis_dataset_3d(
             print(f"Warning: Could not check JAX devices: {e}")
             print("Continuing with CPU mode...")
     
+    print("DEBUG: About to generate JAX random key", flush=True)
+    sys.stdout.flush()
+    
     key = jax.random.PRNGKey(random_seed)
+    
+    print("DEBUG: JAX random key generated", flush=True)
+    sys.stdout.flush()
+    
+    print("DEBUG: About to force garbage collection", flush=True)
+    sys.stdout.flush()
     
     # Force garbage collection before starting
     gc.collect()
     
+    print("DEBUG: Garbage collection completed", flush=True)
+    sys.stdout.flush()
+    
     # Choose dataset generation method based on expected size
     use_streaming = True  # Use streaming by default for large datasets
+    
+    print("DEBUG: About to calculate max_tiles_per_image", flush=True)
+    sys.stdout.flush()
     
     # Adjust max_tiles_per_image based on tile size to prevent OOM
     # For 2GB images, be VERY aggressive with limits
@@ -395,10 +456,17 @@ def generate_piscis_dataset_3d(
             print(f"⚠️  Large tile size detected: {tile_size}")
             print(f"   Reducing max_tiles_per_image to {max_tiles_per_image} to prevent OOM")
     
+    print(f"DEBUG: About to start dataset generation. use_streaming={use_streaming}, max_tiles_per_image={max_tiles_per_image}", flush=True)
+    sys.stdout.flush()
+    
     if use_streaming:
         if verbose:
             print("Using STREAMING dataset generation (memory efficient)...")
             print(f"  Max tiles per image: {max_tiles_per_image}")
+        
+        print("DEBUG: About to call generate_dataset_3d_streaming()", flush=True)
+        sys.stdout.flush()
+        
         try:
             # Use streaming approach - saves batches without loading everything
             if profiler:
